@@ -1,142 +1,108 @@
 # Thymer Desktop
 
-Electron app that provides local services for Thymer:
+System tray app that bridges Thymer to CLI tools and MCP clients.
 
-- **MCP Bridge** - Expose Thymer tools to Claude Desktop, Cursor, etc.
-- **CORS Proxy** - Let browser-based SyncHub call local LLMs without CORS issues
-- **Local LLM** - Manage and run local models via Ollama
+Written in Go with fyne.io/systray for cross-platform tray support.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Thymer (Browser)                                     │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    SyncHub Plugin                                │   │
-│  │       WebSocket CLIENT connects to Desktop ──────────────────────────┐
-│  └─────────────────────────────────────────────────────────────────┘   ││
-└─────────────────────────────────────────────────────────────────────────┘│
-                                                                           │
-┌──────────────────────────────────────────────────────────────────────────┘
-│
-▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Thymer Desktop (Electron)                            │
-│                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │  WebSocket SERVER (port 9848)                                    │  │
-│  │  ◄── SyncHub connects here, pushes tools, receives commands      │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│                           │                                             │
-│  ┌──────────────┐  ┌──────┴───────┐  ┌────────────────────────┐        │
-│  │  MCP Server  │  │  HTTP API    │  │   Local LLM Runtime    │        │
-│  │  (for AI     │  │  (for CLI +  │  │   (Ollama manager)     │        │
-│  │   clients)   │  │   CORS proxy)│  │                        │        │
-│  └──────────────┘  └──────────────┘  └────────────────────────┘        │
-└─────────────────────────────────────────────────────────────────────────┘
-         │                    │
-         ▼                    ▼
-   Claude Desktop         thymer-cli
-   (MCP client)           (automation)
+┌─────────────────────────────────────────────────────────────────┐
+│  thymer-desktop (Go binary, ~15MB)                              │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │  System Tray                                                ││
+│  │  ├── Status: ● Connected (18 tools)                         ││
+│  │  ├── Open Thymer                                            ││
+│  │  ├── Sync All                                               ││
+│  │  ├── Settings                                               ││
+│  │  └── Quit                                                   ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  WebSocket Server (:9848)                                 │  │
+│  │  ◄── SyncHub (browser) connects here                      │  │
+│  │  ◄── Pushes tools, receives commands                      │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  HTTP API (:9847)                                         │  │
+│  │  ◄── CLI and MCP clients connect here                     │  │
+│  │                                                           │  │
+│  │  GET  /api/status     Connection status                   │  │
+│  │  GET  /api/query      Query collections                   │  │
+│  │  POST /api/sync       Trigger plugin syncs                │  │
+│  │  POST /api/capture    Quick capture to journal            │  │
+│  │  GET  /api/mcp/tools  List available tools                │  │
+│  │  POST /api/mcp/call   Execute a tool                      │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Key insight:** SyncHub (browser plugin) connects TO the Desktop app, not the other way around. This works because:
-- We control SyncHub, not Thymer itself
-- Browser can make WebSocket connections to localhost
-- Desktop acts as a bridge between browser and external tools (CLI, MCP)
-
-## Quick Start
+## Build
 
 ```bash
-# Install dependencies
+# Build
 cd desktop
-npm install
+go build -o thymer-desktop .
 
-# Run in development
-npm run dev
-
-# Build for production
-npm run package
+# Or use Makefile from repo root
+make desktop
 ```
 
-## HTTP API (Port 9847)
+## Run
 
-### Status
 ```bash
-GET /api/status
+# With system tray
+./thymer-desktop
+
+# Headless (no tray, just servers)
+./thymer-desktop --headless
+
+# Custom ports
+./thymer-desktop --http=8080 --ws=8081
 ```
 
-### Query Collections
-```bash
-GET /api/query?collection=issues&state=open&limit=10
+## Configuration
+
+Config is stored in `~/.config/thymer-desktop/config.json`:
+
+```json
+{
+  "workspace": "myworkspace.thymer.com"
+}
 ```
 
-### Trigger Sync
+## How It Works
+
+1. **thymer-desktop** starts and listens on WebSocket port 9848
+2. User opens Thymer in browser with SyncHub plugin
+3. SyncHub connects to `ws://127.0.0.1:9848`
+4. SyncHub pushes available tools (from collection plugins)
+5. CLI/MCP clients can now query collections, trigger syncs, etc.
+
+## Use with CLI
+
 ```bash
-POST /api/sync
-{"plugin": "github"}
-# or
-{"all": true}
+# Check status
+thymer status
+
+# Query issues
+thymer query issues --state=open
+
+# Trigger sync
+thymer sync github
+
+# Quick capture
+thymer capture "Remember to check the logs"
 ```
 
-### Quick Capture
-```bash
-POST /api/capture
-{"text": "Note from CLI", "source": "cli"}
-```
-
-### MCP Tools
-```bash
-GET /api/mcp/tools           # List available tools
-POST /api/mcp/call           # Execute a tool
-{"name": "issues_find", "args": {"state": "open"}}
-```
-
-### LLM Proxy (CORS-free)
-```bash
-# Ollama-style endpoint
-POST /api/llm/chat
-{"model": "qwen2.5:7b", "messages": [...], "stream": true}
-
-# OpenAI-compatible endpoint (for AgentHub)
-POST /v1/chat/completions
-{"model": "qwen2.5:7b", "messages": [...], "stream": true}
-```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `THYMER_WS_URL` | `ws://localhost:9848` | Thymer WebSocket endpoint |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
-
-## Using with Claude Desktop
-
-1. Install the CLI: `go install ./cli`
-2. Register MCP server: `thymer mcp install`
-3. Restart Claude Desktop
-
-Claude can now use Thymer tools:
-- "Search my open issues"
-- "What's on my calendar today?"
-- "Find my recent captures about X"
-
-## System Tray
-
-The app runs in the system tray with:
-- Status indicator (connected/disconnected)
-- Quick access to start/stop local LLM
-- Reconnect to Thymer
-
-## Development
+## Use with Claude Desktop (MCP)
 
 ```bash
-# Watch mode (auto-rebuild)
-npm run dev
+# Install MCP config
+thymer mcp install
 
-# Build TypeScript only
-npm run build
-
-# Package for distribution
-npm run package
+# Restart Claude Desktop
+# Claude can now use Thymer tools
 ```

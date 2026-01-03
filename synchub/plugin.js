@@ -1972,14 +1972,26 @@ class Plugin extends CollectionPlugin {
         // Don't connect in non-browser environments
         if (typeof WebSocket === 'undefined') return;
 
+        // Don't connect if already connected or connecting
+        if (this.desktopWs && this.desktopWs.readyState <= WebSocket.OPEN) {
+            console.debug('[SyncHub] Already connected to Desktop, skipping');
+            return;
+        }
+
         const wsUrl = 'ws://127.0.0.1:9848';
         this.desktopReconnectAttempts = 0;
         this.desktopMaxReconnectAttempts = 5;
+        this.desktopIntentionalClose = false;
 
         this._connectDesktopWebSocket(wsUrl);
     }
 
     _connectDesktopWebSocket(wsUrl) {
+        // Check again in case of race
+        if (this.desktopWs && this.desktopWs.readyState <= WebSocket.OPEN) {
+            return;
+        }
+
         try {
             this.desktopWs = new WebSocket(wsUrl);
 
@@ -2002,14 +2014,23 @@ class Plugin extends CollectionPlugin {
                 this._handleDesktopMessage(event.data);
             };
 
-            this.desktopWs.onclose = () => {
+            this.desktopWs.onclose = (event) => {
                 console.log('[SyncHub] Disconnected from Thymer Desktop');
+                const wasIntentional = this.desktopIntentionalClose;
                 this.desktopWs = null;
+
+                // Don't reconnect if intentionally closed or if code 1000 (normal) / 1001 (going away)
+                // Code 1008 = policy violation (server closed us for new client)
+                if (wasIntentional || event.code === 1008) {
+                    console.debug('[SyncHub] Not reconnecting (intentional or replaced by new client)');
+                    return;
+                }
 
                 // Reconnect with backoff
                 if (this.desktopReconnectAttempts < this.desktopMaxReconnectAttempts) {
                     const delay = Math.min(1000 * Math.pow(2, this.desktopReconnectAttempts), 30000);
                     this.desktopReconnectAttempts++;
+                    console.debug(`[SyncHub] Reconnecting in ${delay}ms (attempt ${this.desktopReconnectAttempts})`);
                     setTimeout(() => this._connectDesktopWebSocket(wsUrl), delay);
                 }
             };
@@ -2026,7 +2047,8 @@ class Plugin extends CollectionPlugin {
 
     disconnectFromDesktop() {
         if (this.desktopWs) {
-            this.desktopWs.close();
+            this.desktopIntentionalClose = true;
+            this.desktopWs.close(1000, 'Plugin unloading');
             this.desktopWs = null;
         }
     }

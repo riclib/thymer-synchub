@@ -7,13 +7,9 @@ all: cli desktop
 cli:
 	cd cli && go build -o thymer .
 
-# Build Electron app (TypeScript only, not packaged)
+# Build Go desktop app
 desktop:
-	cd desktop && npm install && npm run build
-
-# Build packaged Electron app
-desktop-package:
-	cd desktop && npm install && npm run package
+	cd desktop && go build -o thymer-desktop .
 
 # Install CLI to /usr/local/bin
 install: cli
@@ -24,20 +20,23 @@ install-local: cli
 	mkdir -p ~/.local/bin
 	cp cli/thymer ~/.local/bin/
 
-# Development mode
-dev:
-	@echo "Starting desktop in dev mode..."
-	cd desktop && npm run dev
+# Install desktop to ~/.local/bin
+install-desktop: desktop
+	mkdir -p ~/.local/bin
+	cp desktop/thymer-desktop ~/.local/bin/
+
+# Development mode - run desktop
+dev: desktop
+	./desktop/thymer-desktop
+
+# Run in headless mode (no tray)
+headless: desktop
+	./desktop/thymer-desktop --headless
 
 # Clean build artifacts
 clean:
 	rm -f cli/thymer
-	rm -rf desktop/dist
-	rm -rf desktop/out
-
-# Run desktop app
-run: desktop
-	cd desktop && npm start
+	rm -f desktop/thymer-desktop
 
 # Cross-compile CLI for all platforms
 cli-all:
@@ -47,6 +46,13 @@ cli-all:
 	cd cli && GOOS=darwin GOARCH=arm64 go build -o thymer-darwin-arm64 .
 	cd cli && GOOS=windows GOARCH=amd64 go build -o thymer-windows-amd64.exe .
 
+# Cross-compile desktop for all platforms
+desktop-all:
+	cd desktop && GOOS=linux GOARCH=amd64 go build -o thymer-desktop-linux-amd64 .
+	cd desktop && GOOS=darwin GOARCH=amd64 go build -o thymer-desktop-darwin-amd64 .
+	cd desktop && GOOS=darwin GOARCH=arm64 go build -o thymer-desktop-darwin-arm64 .
+	cd desktop && GOOS=windows GOARCH=amd64 go build -o thymer-desktop-windows-amd64.exe .
+
 # Help
 help:
 	@echo "Thymer Desktop & CLI Build"
@@ -54,11 +60,12 @@ help:
 	@echo "Usage:"
 	@echo "  make              Build both CLI and desktop"
 	@echo "  make cli          Build Go CLI only"
-	@echo "  make desktop      Build Electron app (TypeScript)"
-	@echo "  make desktop-package  Package Electron app for distribution"
+	@echo "  make desktop      Build Go desktop app"
 	@echo "  make install      Install CLI to /usr/local/bin (requires sudo)"
 	@echo "  make install-local Install CLI to ~/.local/bin"
-	@echo "  make dev          Run desktop in development mode"
-	@echo "  make run          Run desktop app"
+	@echo "  make install-desktop Install desktop to ~/.local/bin"
+	@echo "  make dev          Build and run desktop app"
+	@echo "  make headless     Run desktop without system tray"
 	@echo "  make clean        Remove build artifacts"
 	@echo "  make cli-all      Cross-compile CLI for all platforms"
+	@echo "  make desktop-all  Cross-compile desktop for all platforms"
