@@ -82,12 +82,6 @@
           "label": "Custom",
           "color": "4",
           "active": true
-        },
-        {
-          "id": "proxied",
-          "label": "Proxied (Local)",
-          "color": "6",
-          "active": true
         }
       ]
     },
