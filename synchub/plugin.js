@@ -156,6 +156,9 @@ const DASHBOARD_CSS = `
     .sync-summary-dot.healthy { background: var(--enum-green-bg); }
     .sync-summary-dot.warning { background: var(--enum-orange-bg); }
     .sync-summary-dot.error { background: var(--enum-red-bg); }
+    .sync-summary-dot.desktop-connected { background: var(--enum-blue-bg); }
+    .sync-summary-dot.desktop-disconnected { background: var(--text-muted); opacity: 0.5; }
+    .sync-summary-item.desktop-status { margin-left: auto; }
     .sync-dashboard-empty {
         text-align: center;
         padding: 60px 20px;
@@ -510,6 +513,7 @@ class Plugin extends CollectionPlugin {
 
                 // Summary row
                 const summaryClass = errorCount > 0 ? 'error' : (enabledCount === healthyCount ? 'healthy' : 'warning');
+                const desktopConnected = this.isDesktopConnected();
                 const summary = document.createElement('div');
                 summary.className = 'sync-dashboard-summary';
                 summary.innerHTML = `
@@ -520,6 +524,10 @@ class Plugin extends CollectionPlugin {
                     <div class="sync-summary-item">
                         <span class="sync-summary-dot ${summaryClass}"></span>
                         <span>${errorCount > 0 ? `${errorCount} error${errorCount > 1 ? 's' : ''}` : 'All healthy'}</span>
+                    </div>
+                    <div class="sync-summary-item desktop-status">
+                        <span class="sync-summary-dot ${desktopConnected ? 'desktop-connected' : 'desktop-disconnected'}"></span>
+                        <span>Desktop ${desktopConnected ? 'connected' : 'offline'}</span>
                     </div>
                 `;
                 container.appendChild(summary);
@@ -2098,5 +2106,13 @@ class Plugin extends CollectionPlugin {
             });
         }
         return plugins;
+    }
+
+    /**
+     * Check if connected to Thymer Desktop
+     * @returns {boolean}
+     */
+    isDesktopConnected() {
+        return this.desktopWs && this.desktopWs.readyState === WebSocket.OPEN;
     }
 }
