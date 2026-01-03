@@ -178,14 +178,32 @@ func (b *Bridge) handleMessage(data []byte) {
 			b.tools = make([]Tool, 0, len(toolsRaw))
 			for _, t := range toolsRaw {
 				if toolMap, ok := t.(map[string]interface{}); ok {
-					tool := Tool{
-						Name:        getString(toolMap, "name"),
-						Description: getString(toolMap, "description"),
+					// Tools come in OpenAI function format: {type: "function", function: {name, description, parameters}}
+					var name, description string
+					var params map[string]interface{}
+
+					if fn, ok := toolMap["function"].(map[string]interface{}); ok {
+						name = getString(fn, "name")
+						description = getString(fn, "description")
+						if p, ok := fn["parameters"].(map[string]interface{}); ok {
+							params = p
+						}
+					} else {
+						// Fallback to flat format
+						name = getString(toolMap, "name")
+						description = getString(toolMap, "description")
+						if p, ok := toolMap["parameters"].(map[string]interface{}); ok {
+							params = p
+						}
 					}
-					if params, ok := toolMap["parameters"].(map[string]interface{}); ok {
-						tool.Parameters = params
+
+					if name != "" {
+						b.tools = append(b.tools, Tool{
+							Name:        name,
+							Description: description,
+							Parameters:  params,
+						})
 					}
-					b.tools = append(b.tools, tool)
 				}
 			}
 			b.mu.Unlock()
