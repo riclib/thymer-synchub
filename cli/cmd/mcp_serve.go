@@ -1,154 +1,132 @@
 package cmd
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 )
 
+var (
+	mcpHTTPAddr string
+)
+
 var mcpServeCmd = &cobra.Command{
-	Use:    "serve",
-	Short:  "Run as MCP server (stdio mode)",
-	Long:   `Run as an MCP server using stdio transport. Used by Claude Desktop.`,
-	Hidden: true, // Internal command, invoked by Claude Desktop
-	Run:    runMcpServe,
+	Use:   "serve",
+	Short: "Run as MCP server",
+	Long: `Run as an MCP server. Supports two transports:
+
+  stdio (default): For Claude Desktop integration
+  http:            For remote access (Claude mobile, cloud deployment)
+
+Examples:
+  thymer mcp serve              # stdio mode for Claude Desktop
+  thymer mcp serve --http :8080 # HTTP mode for remote access`,
+	Run: runMcpServe,
 }
 
 func init() {
+	mcpServeCmd.Flags().StringVar(&mcpHTTPAddr, "http", "", "HTTP address to listen on (e.g., :8080)")
 	mcpCmd.AddCommand(mcpServeCmd)
 }
 
-// MCP JSON-RPC types
-type jsonRPCRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-type jsonRPCResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      interface{} `json:"id"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *rpcError   `json:"error,omitempty"`
-}
-
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
 func runMcpServe(cmd *cobra.Command, args []string) {
-	reader := bufio.NewReader(os.Stdin)
+	// Create MCP server
+	server := mcp.NewServer(
+		&mcp.Implementation{
+			Name:    "thymer",
+			Version: "0.1.0",
+		},
+		nil,
+	)
 
-	for {
-		line, err := reader.ReadString('\n')
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			continue
-		}
+	// Fetch and register tools from thymer-bar
+	if err := registerToolsFromDesktop(server); err != nil {
+		log.Printf("[MCP] Warning: Could not fetch tools from thymer-bar: %v", err)
+		log.Printf("[MCP] Server will start without tools. Ensure thymer-bar is running.")
+	}
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+	ctx := context.Background()
 
-		var req jsonRPCRequest
-		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			sendError(nil, -32700, "Parse error")
-			continue
+	if mcpHTTPAddr != "" {
+		// HTTP mode
+		log.Printf("[MCP] Starting HTTP server on %s", mcpHTTPAddr)
+		handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+			return server
+		}, nil)
+		if err := http.ListenAndServe(mcpHTTPAddr, handler); err != nil {
+			log.Fatalf("[MCP] HTTP server error: %v", err)
 		}
-
-		handleMcpRequest(&req)
+	} else {
+		// Stdio mode (default)
+		if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
+			fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
-func handleMcpRequest(req *jsonRPCRequest) {
-	switch req.Method {
-	case "initialize":
-		sendResult(req.ID, map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"capabilities": map[string]interface{}{
-				"tools": map[string]interface{}{},
-			},
-			"serverInfo": map[string]interface{}{
-				"name":    "thymer",
-				"version": "0.1.0",
-			},
-		})
-
-	case "initialized":
-		// No response needed for notification
-
-	case "tools/list":
-		tools := fetchToolsFromDesktop()
-		sendResult(req.ID, map[string]interface{}{
-			"tools": tools,
-		})
-
-	case "tools/call":
-		var params struct {
-			Name      string                 `json:"name"`
-			Arguments map[string]interface{} `json:"arguments"`
-		}
-		json.Unmarshal(req.Params, &params)
-
-		result := executeToolViaDesktop(params.Name, params.Arguments)
-		sendResult(req.ID, map[string]interface{}{
-			"content": []map[string]interface{}{
-				{
-					"type": "text",
-					"text": result,
-				},
-			},
-		})
-
-	default:
-		sendError(req.ID, -32601, "Method not found: "+req.Method)
-	}
-}
-
-func fetchToolsFromDesktop() []map[string]interface{} {
+// registerToolsFromDesktop fetches tools from thymer-bar and registers them
+func registerToolsFromDesktop(server *mcp.Server) error {
 	resp, err := http.Get(serverAddr + "/api/mcp/tools")
 	if err != nil {
-		return []map[string]interface{}{}
+		return fmt.Errorf("failed to connect to thymer-bar: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var tools []map[string]interface{}
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &tools)
-
-	// Convert to MCP format
-	mcpTools := make([]map[string]interface{}, 0, len(tools))
-	for _, t := range tools {
-		mcpTool := map[string]interface{}{
-			"name":        t["name"],
-			"description": t["description"],
-		}
-		if params, ok := t["parameters"]; ok {
-			mcpTool["inputSchema"] = params
-		} else {
-			mcpTool["inputSchema"] = map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{},
-			}
-		}
-		mcpTools = append(mcpTools, mcpTool)
+	var tools []struct {
+		Name        string                 `json:"name"`
+		Description string                 `json:"description"`
+		InputSchema map[string]interface{} `json:"inputSchema"`
 	}
 
-	return mcpTools
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &tools); err != nil {
+		return fmt.Errorf("failed to parse tools: %w", err)
+	}
+
+	log.Printf("[MCP] Registering %d tools from thymer-bar", len(tools))
+
+	for _, t := range tools {
+		// Build input schema - must be type "object"
+		inputSchema := t.InputSchema
+		if inputSchema == nil {
+			inputSchema = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+		}
+
+		tool := &mcp.Tool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: inputSchema,
+		}
+
+		// Register with a dynamic handler that proxies to thymer-bar
+		toolName := t.Name // capture for closure
+		mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, input map[string]interface{}) (*mcp.CallToolResult, map[string]interface{}, error) {
+			result, err := executeToolViaDesktopSDK(toolName, input)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: result},
+				},
+			}, nil, nil
+		})
+	}
+
+	return nil
 }
 
-func executeToolViaDesktop(name string, args map[string]interface{}) string {
+// executeToolViaDesktopSDK calls a tool via thymer-bar HTTP API
+func executeToolViaDesktopSDK(name string, args map[string]interface{}) (string, error) {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"name": name,
 		"args": args,
@@ -156,30 +134,10 @@ func executeToolViaDesktop(name string, args map[string]interface{}) string {
 
 	resp, err := http.Post(serverAddr+"/api/mcp/call", "application/json", strings.NewReader(string(payload)))
 	if err != nil {
-		return fmt.Sprintf(`{"error": "Failed to connect to Thymer Desktop: %v"}`, err)
+		return "", fmt.Errorf("failed to connect to thymer-bar: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	return string(body)
-}
-
-func sendResult(id interface{}, result interface{}) {
-	resp := jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  result,
-	}
-	data, _ := json.Marshal(resp)
-	fmt.Println(string(data))
-}
-
-func sendError(id interface{}, code int, message string) {
-	resp := jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &rpcError{Code: code, Message: message},
-	}
-	data, _ := json.Marshal(resp)
-	fmt.Println(string(data))
+	return string(body), nil
 }
