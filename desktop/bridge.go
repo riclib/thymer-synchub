@@ -48,9 +48,14 @@ type Bridge struct {
 	tools   []Tool
 	plugins []Plugin
 
-	callID   atomic.Int64
-	pending  map[string]*PendingCall
+	callID    atomic.Int64
+	pending   map[string]*PendingCall
 	pendingMu sync.RWMutex
+
+	// Callbacks
+	OnConnect    func()
+	OnDisconnect func()
+	connected    bool // tracks if OnConnect was called
 }
 
 func NewBridge(port int) *Bridge {
@@ -134,9 +139,16 @@ func (b *Bridge) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		b.client = nil
 		b.tools = nil
 		b.plugins = nil
+		wasConnected := b.connected
+		b.connected = false
+		b.mu.Unlock()
 		log.Println("[Bridge] SyncHub disconnected")
+		if wasConnected && b.OnDisconnect != nil {
+			b.OnDisconnect()
+		}
+	} else {
+		b.mu.Unlock()
 	}
-	b.mu.Unlock()
 }
 
 func (b *Bridge) handleMessage(data []byte) {
@@ -206,9 +218,18 @@ func (b *Bridge) handleMessage(data []byte) {
 					}
 				}
 			}
-			b.mu.Unlock()
-			log.Printf("[Bridge] Received %d tools from SyncHub", len(b.tools))
+			// Call OnConnect after first tool registration
+			if !b.connected && b.OnConnect != nil {
+				b.connected = true
+				b.mu.Unlock()
+				log.Printf("[Bridge] Received %d tools from SyncHub", len(b.tools))
+				b.OnConnect()
+			} else {
+				b.mu.Unlock()
+				log.Printf("[Bridge] Received %d tools from SyncHub", len(b.tools))
+			}
 		}
+		return
 
 	case "plugins":
 		if pluginsRaw, ok := msg["plugins"].([]interface{}); ok {

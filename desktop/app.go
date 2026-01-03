@@ -13,21 +13,24 @@ type App struct {
 	config   *Config
 	httpPort int
 	wsPort   int
+	mcpPort  int
 
 	bridge     *Bridge
 	httpServer *http.Server
+	mcpServer  *MCPServer
 
 	mu     sync.RWMutex
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func NewApp(cfg *Config, httpPort, wsPort int) *App {
+func NewApp(cfg *Config, httpPort, wsPort, mcpPort int) *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
 		config:   cfg,
 		httpPort: httpPort,
 		wsPort:   wsPort,
+		mcpPort:  mcpPort,
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -36,6 +39,31 @@ func NewApp(cfg *Config, httpPort, wsPort int) *App {
 func (a *App) Start() error {
 	// Start WebSocket bridge
 	a.bridge = NewBridge(a.wsPort)
+
+	// Set up MCP lifecycle callbacks
+	if a.mcpPort > 0 {
+		a.bridge.OnConnect = func() {
+			log.Println("[App] SyncHub connected, starting MCP server")
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if a.mcpServer == nil {
+				a.mcpServer = NewMCPServer(a.mcpPort, a.bridge)
+				if err := a.mcpServer.Start(); err != nil {
+					log.Printf("[App] Failed to start MCP server: %v", err)
+				}
+			}
+		}
+		a.bridge.OnDisconnect = func() {
+			log.Println("[App] SyncHub disconnected, stopping MCP server")
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if a.mcpServer != nil {
+				a.mcpServer.Stop()
+				a.mcpServer = nil
+			}
+		}
+	}
+
 	if err := a.bridge.Start(); err != nil {
 		return fmt.Errorf("bridge: %w", err)
 	}
@@ -50,6 +78,10 @@ func (a *App) Start() error {
 
 func (a *App) Stop() {
 	a.cancel()
+
+	if a.mcpServer != nil {
+		a.mcpServer.Stop()
+	}
 
 	if a.httpServer != nil {
 		a.httpServer.Shutdown(context.Background())
