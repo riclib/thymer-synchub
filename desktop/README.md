@@ -10,26 +10,40 @@ Electron app that provides local services for Thymer:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
+│                    Thymer (Browser)                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    SyncHub Plugin                                │   │
+│  │       WebSocket CLIENT connects to Desktop ──────────────────────────┐
+│  └─────────────────────────────────────────────────────────────────┘   ││
+└─────────────────────────────────────────────────────────────────────────┘│
+                                                                           │
+┌──────────────────────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────────────────┐
 │                    Thymer Desktop (Electron)                            │
 │                                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐        │
-│  │  MCP Server  │  │  HTTP Proxy  │  │   Local LLM Runtime    │        │
-│  │  (for AI     │  │  (CORS-free  │  │   (Ollama manager)     │        │
-│  │   clients)   │  │   for browser│  │                        │        │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬─────────────┘        │
-│         │                 │                     │                       │
-│         └─────────────────┴─────────────────────┘                       │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │  WebSocket SERVER (port 9848)                                    │  │
+│  │  ◄── SyncHub connects here, pushes tools, receives commands      │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
 │                           │                                             │
-│              ┌────────────▼────────────┐                               │
-│              │   Thymer SDK Bridge     │                               │
-│              │   (WebSocket to Thymer) │                               │
-│              └─────────────────────────┘                               │
+│  ┌──────────────┐  ┌──────┴───────┐  ┌────────────────────────┐        │
+│  │  MCP Server  │  │  HTTP API    │  │   Local LLM Runtime    │        │
+│  │  (for AI     │  │  (for CLI +  │  │   (Ollama manager)     │        │
+│  │   clients)   │  │   CORS proxy)│  │                        │        │
+│  └──────────────┘  └──────────────┘  └────────────────────────┘        │
 └─────────────────────────────────────────────────────────────────────────┘
-         │                    │                      │
-         ▼                    ▼                      ▼
-   Claude Desktop      Thymer Browser          thymer-cli
-   (MCP client)        (uses CORS proxy)       (automation)
+         │                    │
+         ▼                    ▼
+   Claude Desktop         thymer-cli
+   (MCP client)           (automation)
 ```
+
+**Key insight:** SyncHub (browser plugin) connects TO the Desktop app, not the other way around. This works because:
+- We control SyncHub, not Thymer itself
+- Browser can make WebSocket connections to localhost
+- Desktop acts as a bridge between browser and external tools (CLI, MCP)
 
 ## Quick Start
 

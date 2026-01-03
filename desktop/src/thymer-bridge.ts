@@ -1,4 +1,4 @@
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 
 // Global instance for HTTP server access
 let instance: ThymerBridge | null = null;
@@ -20,97 +20,88 @@ interface PendingCall {
 }
 
 /**
- * Bridge to Thymer via WebSocket
+ * WebSocket Server that SyncHub connects TO
  *
- * Thymer exposes a WebSocket endpoint for plugins to connect externally.
- * This allows the desktop app to:
- * - Execute tool calls (query collections, trigger syncs)
- * - Get registered tools list
- * - Receive real-time updates
+ * SyncHub (browser plugin) initiates the connection to us.
+ * This allows:
+ * - SyncHub to push tool registrations
+ * - Desktop to request tool executions
+ * - Desktop to trigger syncs
  */
 export class ThymerBridge {
-    private ws: WebSocket | null = null;
-    private connected = false;
-    private reconnectTimer: NodeJS.Timeout | null = null;
+    private wss: WebSocketServer | null = null;
+    private client: WebSocket | null = null; // The connected SyncHub client
     private pendingCalls = new Map<string, PendingCall>();
     private callId = 0;
     private tools: Tool[] = [];
     private plugins: Array<{ name: string; enabled: boolean }> = [];
 
-    // Thymer WebSocket URL (configurable)
-    private wsUrl = process.env.THYMER_WS_URL || 'ws://localhost:9848';
+    private port = 9848;
 
     constructor() {
         instance = this;
-        this.connect();
+        this.startServer();
     }
 
-    connect() {
-        if (this.ws) {
-            this.ws.close();
-        }
+    private startServer() {
+        this.wss = new WebSocketServer({ port: this.port, host: '127.0.0.1' });
 
-        console.log(`[Bridge] Connecting to Thymer at ${this.wsUrl}`);
+        console.log(`[Bridge] WebSocket server listening on ws://127.0.0.1:${this.port}`);
 
-        try {
-            this.ws = new WebSocket(this.wsUrl);
+        this.wss.on('connection', (ws) => {
+            console.log('[Bridge] SyncHub connected');
 
-            this.ws.on('open', () => {
-                console.log('[Bridge] Connected to Thymer');
-                this.connected = true;
-                this.requestTools();
-                this.requestPlugins();
-            });
+            // Only allow one client (the browser)
+            if (this.client) {
+                console.log('[Bridge] Closing previous connection');
+                this.client.close();
+            }
+            this.client = ws;
 
-            this.ws.on('message', (data) => {
+            ws.on('message', (data) => {
                 this.handleMessage(data.toString());
             });
 
-            this.ws.on('close', () => {
-                console.log('[Bridge] Disconnected from Thymer');
-                this.connected = false;
-                this.scheduleReconnect();
+            ws.on('close', () => {
+                console.log('[Bridge] SyncHub disconnected');
+                if (this.client === ws) {
+                    this.client = null;
+                    this.tools = [];
+                    this.plugins = [];
+                }
             });
 
-            this.ws.on('error', (err) => {
+            ws.on('error', (err) => {
                 console.error('[Bridge] WebSocket error:', err.message);
-                this.connected = false;
             });
-        } catch (e: any) {
-            console.error('[Bridge] Failed to connect:', e.message);
-            this.scheduleReconnect();
-        }
-    }
 
-    private scheduleReconnect() {
-        if (this.reconnectTimer) return;
-        this.reconnectTimer = setTimeout(() => {
-            this.reconnectTimer = null;
-            this.connect();
-        }, 5000);
-    }
+            // Request initial state
+            this.send({ type: 'get_tools' });
+            this.send({ type: 'get_plugins' });
+        });
 
-    reconnect() {
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
-        this.connect();
+        this.wss.on('error', (err) => {
+            console.error('[Bridge] Server error:', err.message);
+        });
     }
 
     disconnect() {
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
-        this.ws?.close();
-        this.ws = null;
-        this.connected = false;
+        this.client?.close();
+        this.client = null;
+        this.wss?.close();
+        this.wss = null;
         instance = null;
     }
 
+    reconnect() {
+        // Restart the server (client will auto-reconnect)
+        this.disconnect();
+        instance = this;
+        this.startServer();
+    }
+
     isConnected(): boolean {
-        return this.connected;
+        return this.client !== null && this.client.readyState === WebSocket.OPEN;
     }
 
     getPlugins() {
@@ -135,20 +126,27 @@ export class ThymerBridge {
                 return;
             }
 
-            // Handle push messages
+            // Handle push messages FROM SyncHub
             switch (msg.type) {
                 case 'tools':
+                    // SyncHub pushes its registered tools
                     this.tools = msg.tools || [];
-                    console.log(`[Bridge] Received ${this.tools.length} tools`);
+                    console.log(`[Bridge] Received ${this.tools.length} tools from SyncHub`);
                     break;
 
                 case 'plugins':
+                    // SyncHub pushes plugin list
                     this.plugins = msg.plugins || [];
-                    console.log(`[Bridge] Received ${this.plugins.length} plugins`);
+                    console.log(`[Bridge] Received ${this.plugins.length} plugins from SyncHub`);
                     break;
 
                 case 'sync_complete':
                     console.log(`[Bridge] Sync complete: ${msg.plugin}`);
+                    break;
+
+                case 'register':
+                    // SyncHub announces itself
+                    console.log(`[Bridge] SyncHub registered: ${msg.version || 'unknown'}`);
                     break;
             }
         } catch (e) {
@@ -158,8 +156,8 @@ export class ThymerBridge {
 
     private send(msg: any): Promise<any> {
         return new Promise((resolve, reject) => {
-            if (!this.ws || !this.connected) {
-                reject(new Error('Not connected to Thymer'));
+            if (!this.client || this.client.readyState !== WebSocket.OPEN) {
+                reject(new Error('SyncHub not connected'));
                 return;
             }
 
@@ -173,29 +171,16 @@ export class ThymerBridge {
 
             this.pendingCalls.set(id, { resolve, reject, timeout });
 
-            this.ws.send(JSON.stringify(msg));
+            this.client.send(JSON.stringify(msg));
         });
     }
 
-    private requestTools() {
-        this.send({ type: 'get_tools' }).then((tools) => {
-            this.tools = tools || [];
-        }).catch(() => {});
-    }
-
-    private requestPlugins() {
-        this.send({ type: 'get_plugins' }).then((plugins) => {
-            this.plugins = plugins || [];
-        }).catch(() => {});
-    }
-
     // ========================================================================
-    // Public API
+    // Public API (called by HTTP server)
     // ========================================================================
 
     async getTools(): Promise<Tool[]> {
-        if (this.tools.length === 0) {
-            // Try to fetch fresh
+        if (this.tools.length === 0 && this.isConnected()) {
             try {
                 const tools = await this.send({ type: 'get_tools' });
                 this.tools = tools || [];

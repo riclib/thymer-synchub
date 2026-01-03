@@ -313,9 +313,14 @@ class Plugin extends CollectionPlugin {
 
         // Periodic status bar refresh (every 30s to update relative times)
         this.statusBarRefreshInterval = setInterval(() => this.updateStatusBar(), 30000);
+
+        // Connect to Thymer Desktop (if running)
+        this.connectToDesktop();
     }
 
     onUnload() {
+        // Disconnect from desktop
+        this.disconnectFromDesktop();
         if (this.pasteCommand) {
             this.pasteCommand.remove();
         }
@@ -1945,5 +1950,153 @@ class Plugin extends CollectionPlugin {
                 autoDestroyTime: 3000,
             });
         }
+    }
+
+    // =========================================================================
+    // Desktop Bridge - WebSocket connection to Thymer Desktop
+    // =========================================================================
+
+    /**
+     * Connect to Thymer Desktop app for MCP bridge and CLI access.
+     * Desktop exposes a WebSocket server that we connect to.
+     */
+    connectToDesktop() {
+        // Don't connect in non-browser environments
+        if (typeof WebSocket === 'undefined') return;
+
+        const wsUrl = 'ws://127.0.0.1:9848';
+        this.desktopReconnectAttempts = 0;
+        this.desktopMaxReconnectAttempts = 5;
+
+        this._connectDesktopWebSocket(wsUrl);
+    }
+
+    _connectDesktopWebSocket(wsUrl) {
+        try {
+            this.desktopWs = new WebSocket(wsUrl);
+
+            this.desktopWs.onopen = () => {
+                console.log('[SyncHub] Connected to Thymer Desktop');
+                this.desktopReconnectAttempts = 0;
+
+                // Register ourselves
+                this.desktopWs.send(JSON.stringify({
+                    type: 'register',
+                    version: '1.0.0'
+                }));
+
+                // Push current tools and plugins
+                this._pushToolsToDesktop();
+                this._pushPluginsToDesktop();
+            };
+
+            this.desktopWs.onmessage = (event) => {
+                this._handleDesktopMessage(event.data);
+            };
+
+            this.desktopWs.onclose = () => {
+                console.log('[SyncHub] Disconnected from Thymer Desktop');
+                this.desktopWs = null;
+
+                // Reconnect with backoff
+                if (this.desktopReconnectAttempts < this.desktopMaxReconnectAttempts) {
+                    const delay = Math.min(1000 * Math.pow(2, this.desktopReconnectAttempts), 30000);
+                    this.desktopReconnectAttempts++;
+                    setTimeout(() => this._connectDesktopWebSocket(wsUrl), delay);
+                }
+            };
+
+            this.desktopWs.onerror = (err) => {
+                // Silently handle - desktop app might not be running
+                console.debug('[SyncHub] Desktop connection error (app may not be running)');
+            };
+
+        } catch (e) {
+            console.debug('[SyncHub] Could not connect to Desktop:', e.message);
+        }
+    }
+
+    disconnectFromDesktop() {
+        if (this.desktopWs) {
+            this.desktopWs.close();
+            this.desktopWs = null;
+        }
+    }
+
+    _handleDesktopMessage(data) {
+        try {
+            const msg = JSON.parse(data);
+
+            // Handle requests from Desktop
+            switch (msg.type) {
+                case 'get_tools':
+                    this._sendDesktopResponse(msg.id, this.getRegisteredTools());
+                    break;
+
+                case 'get_plugins':
+                    this._sendDesktopResponse(msg.id, this._getPluginList());
+                    break;
+
+                case 'tool_call':
+                    this.executeToolCall(msg.name, msg.args || {})
+                        .then(result => this._sendDesktopResponse(msg.id, result))
+                        .catch(err => this._sendDesktopError(msg.id, err.message));
+                    break;
+
+                case 'sync':
+                    this.requestSync(msg.plugin)
+                        .then(() => this._sendDesktopResponse(msg.id, { success: true }))
+                        .catch(err => this._sendDesktopError(msg.id, err.message));
+                    break;
+
+                case 'sync_all':
+                    this.syncAll()
+                        .then(() => this._sendDesktopResponse(msg.id, { success: true }))
+                        .catch(err => this._sendDesktopError(msg.id, err.message));
+                    break;
+
+                default:
+                    console.debug('[SyncHub] Unknown desktop message type:', msg.type);
+            }
+        } catch (e) {
+            console.error('[SyncHub] Failed to handle desktop message:', e);
+        }
+    }
+
+    _sendDesktopResponse(id, result) {
+        if (!this.desktopWs || this.desktopWs.readyState !== WebSocket.OPEN) return;
+        this.desktopWs.send(JSON.stringify({ id, result }));
+    }
+
+    _sendDesktopError(id, error) {
+        if (!this.desktopWs || this.desktopWs.readyState !== WebSocket.OPEN) return;
+        this.desktopWs.send(JSON.stringify({ id, error }));
+    }
+
+    _pushToolsToDesktop() {
+        if (!this.desktopWs || this.desktopWs.readyState !== WebSocket.OPEN) return;
+        this.desktopWs.send(JSON.stringify({
+            type: 'tools',
+            tools: this.getRegisteredTools()
+        }));
+    }
+
+    _pushPluginsToDesktop() {
+        if (!this.desktopWs || this.desktopWs.readyState !== WebSocket.OPEN) return;
+        this.desktopWs.send(JSON.stringify({
+            type: 'plugins',
+            plugins: this._getPluginList()
+        }));
+    }
+
+    _getPluginList() {
+        const plugins = [];
+        for (const [pluginId, _] of this.syncFunctions) {
+            plugins.push({
+                name: pluginId,
+                enabled: true // We only track registered (enabled) plugins
+            });
+        }
+        return plugins;
     }
 }
