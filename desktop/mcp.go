@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -84,25 +85,31 @@ func (m *MCPServer) registerTools() {
 		// Capture tool name for closure
 		toolName := t.Name
 		mcp.AddTool(m.server, tool, func(ctx context.Context, req *mcp.CallToolRequest, input map[string]interface{}) (*mcp.CallToolResult, map[string]interface{}, error) {
-			result, err := m.executeTool(toolName, input)
+			structured, err := m.executeTool(toolName, input)
 			if err != nil {
 				return nil, nil, err
 			}
+			// Return as structured content for Claude Code
 			return &mcp.CallToolResult{
-				Content: []mcp.Content{
-					&mcp.TextContent{Text: result},
-				},
-			}, map[string]interface{}{}, nil
+				Content: []mcp.Content{},
+			}, structured, nil
 		})
 	}
 }
 
-func (m *MCPServer) executeTool(name string, args map[string]interface{}) (string, error) {
+func (m *MCPServer) executeTool(name string, args map[string]interface{}) (map[string]interface{}, error) {
 	result, err := m.bridge.ExecuteTool(name, args)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(result), nil
+
+	// Parse JSON result into structured content
+	var structured map[string]interface{}
+	if err := json.Unmarshal(result, &structured); err != nil {
+		// If not valid JSON, wrap the text
+		return map[string]interface{}{"text": string(result)}, nil
+	}
+	return structured, nil
 }
 
 func (m *MCPServer) Stop() {
