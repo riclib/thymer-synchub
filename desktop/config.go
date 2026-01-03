@@ -5,12 +5,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
-	Workspace string `json:"workspace"`
-	Token     string `json:"token,omitempty"`
-	path      string
+	Workspace  string `json:"workspace"`
+	ThymerURLv string `json:"thymerUrl,omitempty"` // From Electron config
+	Token      string `json:"token,omitempty"`
+	path       string
 }
 
 func configDir() string {
@@ -62,8 +64,17 @@ func (c *Config) Save() error {
 }
 
 func (c *Config) ThymerURL() string {
+	// Use stored URL if present (from Electron config)
+	if c.ThymerURLv != "" {
+		return c.ThymerURLv
+	}
+	// Construct from workspace
 	if c.Workspace == "" {
 		return "https://app.thymer.com"
+	}
+	// Add .thymer.com if not already a full domain
+	if !strings.Contains(c.Workspace, ".") {
+		return "https://" + c.Workspace + ".thymer.com"
 	}
 	return "https://" + c.Workspace
 }

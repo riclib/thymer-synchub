@@ -7,9 +7,9 @@ all: cli desktop
 cli:
 	cd cli && go build -o thymer .
 
-# Build Go desktop app
+# Build Go desktop app (system tray)
 desktop:
-	cd desktop && go build -o thymer-desktop .
+	cd desktop && go build -o thymer-bar .
 
 # Install CLI to /usr/local/bin
 install: cli
@@ -23,20 +23,20 @@ install-local: cli
 # Install desktop to ~/.local/bin
 install-desktop: desktop
 	mkdir -p ~/.local/bin
-	cp desktop/thymer-desktop ~/.local/bin/
+	cp desktop/thymer-bar ~/.local/bin/
 
 # Development mode - run desktop
 dev: desktop
-	./desktop/thymer-desktop
+	./desktop/thymer-bar
 
 # Run in headless mode (no tray)
 headless: desktop
-	./desktop/thymer-desktop --headless
+	./desktop/thymer-bar --headless
 
 # Clean build artifacts
 clean:
 	rm -f cli/thymer
-	rm -f desktop/thymer-desktop
+	rm -f desktop/thymer-bar
 
 # Cross-compile CLI for all platforms
 cli-all:
@@ -48,10 +48,10 @@ cli-all:
 
 # Cross-compile desktop for all platforms
 desktop-all:
-	cd desktop && GOOS=linux GOARCH=amd64 go build -o thymer-desktop-linux-amd64 .
-	cd desktop && GOOS=darwin GOARCH=amd64 go build -o thymer-desktop-darwin-amd64 .
-	cd desktop && GOOS=darwin GOARCH=arm64 go build -o thymer-desktop-darwin-arm64 .
-	cd desktop && GOOS=windows GOARCH=amd64 go build -o thymer-desktop-windows-amd64.exe .
+	cd desktop && GOOS=linux GOARCH=amd64 go build -o thymer-bar-linux-amd64 .
+	cd desktop && GOOS=darwin GOARCH=amd64 go build -o thymer-bar-darwin-amd64 .
+	cd desktop && GOOS=darwin GOARCH=arm64 go build -o thymer-bar-darwin-arm64 .
+	cd desktop && GOOS=windows GOARCH=amd64 go build -o thymer-bar-windows-amd64.exe .
 
 # Help
 help:

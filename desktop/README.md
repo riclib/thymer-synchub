@@ -1,6 +1,6 @@
-# Thymer Desktop
+# Thymer Bar
 
-System tray app that bridges Thymer to CLI tools and MCP clients.
+System tray / menubar app that bridges Thymer to CLI tools and MCP clients.
 
 Written in Go with fyne.io/systray for cross-platform tray support.
 
@@ -8,7 +8,7 @@ Written in Go with fyne.io/systray for cross-platform tray support.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  thymer-desktop (Go binary, ~15MB)                              │
+│  thymer-bar (Go binary, ~12MB)                                  │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────────┐│
 │  │  System Tray                                                ││
@@ -44,7 +44,7 @@ Written in Go with fyne.io/systray for cross-platform tray support.
 ```bash
 # Build
 cd desktop
-go build -o thymer-desktop .
+go build -o thymer-bar .
 
 # Or use Makefile from repo root
 make desktop
@@ -54,13 +54,13 @@ make desktop
 
 ```bash
 # With system tray
-./thymer-desktop
+./thymer-bar
 
 # Headless (no tray, just servers)
-./thymer-desktop --headless
+./thymer-bar --headless
 
 # Custom ports
-./thymer-desktop --http=8080 --ws=8081
+./thymer-bar --http=8080 --ws=8081
 ```
 
 ## Configuration
