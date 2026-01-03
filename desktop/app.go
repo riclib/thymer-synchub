@@ -10,26 +10,31 @@ import (
 
 // App coordinates all desktop services
 type App struct {
-	config   *Config
-	httpPort int
-	wsPort   int
+	config     *Config
+	httpPort   int
+	wsPort     int
+	llmPort    int
+	llmBackend string
 
 	bridge     *Bridge
 	httpServer *http.Server
+	llmProxy   *LLMProxy
 
 	mu     sync.RWMutex
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func NewApp(cfg *Config, httpPort, wsPort int) *App {
+func NewApp(cfg *Config, httpPort, wsPort, llmPort int, llmBackend string) *App {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &App{
-		config:   cfg,
-		httpPort: httpPort,
-		wsPort:   wsPort,
-		ctx:      ctx,
-		cancel:   cancel,
+		config:     cfg,
+		httpPort:   httpPort,
+		wsPort:     wsPort,
+		llmPort:    llmPort,
+		llmBackend: llmBackend,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
@@ -45,6 +50,14 @@ func (a *App) Start() error {
 		return fmt.Errorf("http: %w", err)
 	}
 
+	// Start LLM proxy if port configured
+	if a.llmPort > 0 {
+		a.llmProxy = NewLLMProxy(a.llmPort, a.llmBackend)
+		if err := a.llmProxy.Start(); err != nil {
+			return fmt.Errorf("llm proxy: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -57,6 +70,10 @@ func (a *App) Stop() {
 
 	if a.bridge != nil {
 		a.bridge.Stop()
+	}
+
+	if a.llmProxy != nil {
+		a.llmProxy.Stop()
 	}
 }
 

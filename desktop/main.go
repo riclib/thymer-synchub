@@ -14,12 +14,15 @@ const (
 	Version     = "0.1.0"
 	DefaultHTTP = 9847
 	DefaultWS   = 9848
+	DefaultLLM  = 9849
 )
 
 func main() {
 	// Flags
 	httpPort := flag.Int("http", DefaultHTTP, "HTTP API port")
 	wsPort := flag.Int("ws", DefaultWS, "WebSocket port")
+	llmPort := flag.Int("llm", DefaultLLM, "LLM proxy WebSocket port (0 to disable)")
+	llmBackend := flag.String("llm-backend", "", "LLM backend URL (default: http://localhost:11434/v1)")
 	headless := flag.Bool("headless", false, "Run without system tray (server only)")
 	version := flag.Bool("version", false, "Show version")
 	flag.Parse()
@@ -40,7 +43,7 @@ func main() {
 	log.Printf("[Desktop] Starting for workspace: %s", cfg.Workspace)
 
 	// Create the app
-	app := NewApp(cfg, *httpPort, *wsPort)
+	app := NewApp(cfg, *httpPort, *wsPort, *llmPort, *llmBackend)
 
 	// Start servers
 	if err := app.Start(); err != nil {
