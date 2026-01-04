@@ -1869,12 +1869,35 @@ class Plugin extends CollectionPlugin {
     /**
      * Build HTML label for MCP status bar
      */
-    buildMcpLabel(connected) {
+    buildMcpLabel(connected, active = false) {
         if (connected) {
+            if (active) {
+                // Blink animation for activity
+                return `<style>@keyframes mcpBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }</style>
+                    <span style="opacity: 0.8;">MCP</span> <span style="color: #4ade80; animation: mcpBlink 0.15s ease-in-out;">●</span>`;
+            }
             return '<span style="opacity: 0.8;">MCP</span> <span style="color: #4ade80;">●</span>';
         } else {
             return '<span style="opacity: 0.4; text-decoration: line-through;">MCP</span>';
         }
+    }
+
+    /**
+     * Flash MCP indicator on activity
+     */
+    flashMcpActivity() {
+        if (!this.mcpStatusBarItem || !this.isDesktopConnected()) return;
+
+        // Show active state
+        this.mcpStatusBarItem.setHtmlLabel(this.buildMcpLabel(true, true));
+
+        // Return to idle after flash
+        clearTimeout(this.mcpFlashTimeout);
+        this.mcpFlashTimeout = setTimeout(() => {
+            if (this.isDesktopConnected()) {
+                this.mcpStatusBarItem.setHtmlLabel(this.buildMcpLabel(true, false));
+            }
+        }, 150);
     }
 
     /**
@@ -2196,6 +2219,7 @@ class Plugin extends CollectionPlugin {
                     break;
 
                 case 'tool_call':
+                    this.flashMcpActivity();
                     this.executeToolCall(msg.name, msg.args || {})
                         .then(result => this._sendDesktopResponse(msg.id, result))
                         .catch(err => this._sendDesktopError(msg.id, err.message));
