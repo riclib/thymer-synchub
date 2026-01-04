@@ -1930,11 +1930,251 @@ class Plugin extends CollectionPlugin {
     }
 
     /**
-     * Handle MCP status bar click - connect/force reconnect
+     * Handle MCP status bar click - show popup menu
      */
-    onMcpStatusBarClick() {
-        // Force connect to desktop (will disconnect other windows)
-        this.connectToDesktop();
+    onMcpStatusBarClick(event) {
+        this.showMcpPopup(event);
+    }
+
+    /**
+     * Show MCP popup menu (cmdpal-style)
+     */
+    showMcpPopup(event) {
+        // Remove existing popup if any
+        this.closeMcpPopup();
+
+        const connected = this.isDesktopConnected();
+        const toolCount = this.getRegisteredTools().length;
+        const duration = this.mcpConnectedAt ? this.formatRelativeTime(this.mcpConnectedAt) : '';
+
+        // Build options
+        const options = [];
+
+        // Status header
+        options.push({
+            type: 'heading',
+            label: 'MCP Status'
+        });
+
+        // Connection status
+        if (connected) {
+            options.push({
+                type: 'info',
+                icon: 'ti-circle-check',
+                iconColor: 'var(--text-status-online)',
+                label: `Connected (${toolCount} tools)`
+            });
+            options.push({
+                type: 'info',
+                label: `Connected ${duration}`
+            });
+        } else {
+            options.push({
+                type: 'info',
+                icon: 'ti-circle-x',
+                iconColor: 'var(--text-status-offline)',
+                label: 'Disconnected'
+            });
+        }
+
+        // Divider
+        options.push({ type: 'divider' });
+
+        // Actions
+        if (connected) {
+            options.push({
+                type: 'action',
+                icon: 'ti-refresh',
+                label: 'Reconnect',
+                action: () => this.connectToDesktop()
+            });
+            options.push({
+                type: 'action',
+                icon: 'ti-plug-off',
+                label: 'Disconnect',
+                action: () => this.disconnectFromDesktop()
+            });
+            options.push({
+                type: 'action',
+                icon: 'ti-list',
+                label: 'Show Tools (console)',
+                action: () => {
+                    console.log('[MCP] Registered tools:', this.getRegisteredTools().map(t => t.function?.name || t.name));
+                }
+            });
+        } else {
+            options.push({
+                type: 'action',
+                icon: 'ti-plug',
+                label: 'Connect',
+                action: () => this.connectToDesktop()
+            });
+        }
+
+        // Divider + debug
+        options.push({ type: 'divider' });
+        options.push({
+            type: 'action',
+            icon: 'ti-bug',
+            label: 'Show Debug Stats 🤓',
+            action: () => this.showMcpDebugToast()
+        });
+
+        this.mcpPopup = this.createCmdpalPopup(options, event);
+    }
+
+    /**
+     * Create a cmdpal-style popup
+     */
+    createCmdpalPopup(options, event) {
+        const popup = document.createElement('div');
+        popup.className = 'cmdpal--inline animate-open active focused-component dropdown synchub-mcp-popup';
+        popup.style.cssText = 'position: fixed; width: 280px; z-index: 9999;';
+
+        // Position near the click
+        const rect = event?.target?.getBoundingClientRect?.();
+        if (rect) {
+            popup.style.bottom = `${window.innerHeight - rect.top + 5}px`;
+            popup.style.left = `${rect.left}px`;
+        } else {
+            popup.style.bottom = '40px';
+            popup.style.right = '20px';
+        }
+
+        let html = '<div class="autocomplete clickable" style="position: relative; overflow: hidden;">';
+        html += '<div style="padding: 0;">';
+
+        let idx = 0;
+        for (const opt of options) {
+            const yPos = idx * 30;
+
+            if (opt.type === 'heading') {
+                html += `<div data-idx="${idx}" class="autocomplete-divider-heading autocomplete--empty" style="transform: translateY(${yPos}px); position: absolute; width: 100%;">
+                    <span class="autocomplete--option-icon"></span>
+                    <span class="autocomplete--option-label">${opt.label}</span>
+                </div>`;
+            } else if (opt.type === 'info') {
+                const iconHtml = opt.icon
+                    ? `<span class="ti ${opt.icon}" style="${opt.iconColor ? `color: ${opt.iconColor};` : ''}"></span>`
+                    : '';
+                html += `<div data-idx="${idx}" class="autocomplete--empty" style="transform: translateY(${yPos}px); position: absolute; width: 100%;">
+                    <span class="autocomplete--option-icon">${iconHtml}</span>
+                    <span class="autocomplete--option-label">${opt.label}</span>
+                </div>`;
+            } else if (opt.type === 'divider') {
+                html += `<div data-idx="${idx}" class="autocomplete--divider autocomplete--empty" style="transform: translateY(${yPos}px); position: absolute; width: 100%; height: 5px;"></div>`;
+                idx -= 0.8; // dividers are shorter
+            } else if (opt.type === 'action') {
+                const iconHtml = opt.icon ? `<span class="ti ${opt.icon}"></span>` : '';
+                html += `<div data-idx="${idx}" data-action="${idx}" class="autocomplete--option" style="transform: translateY(${yPos}px); position: absolute; width: 100%; cursor: pointer;">
+                    <span class="autocomplete--option-icon">${iconHtml}</span>
+                    <span class="autocomplete--option-label">${opt.label}</span>
+                </div>`;
+            }
+            idx++;
+        }
+
+        const height = Math.min(idx * 30 + 10, 300);
+        html += `</div></div>`;
+        popup.innerHTML = html;
+        popup.style.height = `${height}px`;
+
+        // Add click handlers for actions
+        popup.querySelectorAll('[data-action]').forEach((el, i) => {
+            const actionIdx = parseInt(el.dataset.action);
+            const opt = options.find((o, oi) => o.type === 'action' && options.slice(0, oi + 1).filter(x => x.type === 'action').length === Math.floor(actionIdx - options.filter((x, xi) => xi < actionIdx && x.type !== 'action').length) + 1);
+
+            el.addEventListener('click', () => {
+                // Find the actual action
+                let actionCount = 0;
+                for (const o of options) {
+                    if (o.type === 'action') {
+                        if (el.textContent.includes(o.label)) {
+                            o.action?.();
+                            this.closeMcpPopup();
+                            return;
+                        }
+                    }
+                }
+            });
+
+            el.addEventListener('mouseenter', () => el.classList.add('autocomplete--option-selected'));
+            el.addEventListener('mouseleave', () => el.classList.remove('autocomplete--option-selected'));
+        });
+
+        // Close on click outside
+        setTimeout(() => {
+            document.addEventListener('click', this._mcpPopupCloseHandler = (e) => {
+                if (!popup.contains(e.target)) {
+                    this.closeMcpPopup();
+                }
+            });
+        }, 100);
+
+        document.body.appendChild(popup);
+        return popup;
+    }
+
+    /**
+     * Close MCP popup
+     */
+    closeMcpPopup() {
+        if (this.mcpPopup) {
+            this.mcpPopup.remove();
+            this.mcpPopup = null;
+        }
+        if (this._mcpPopupCloseHandler) {
+            document.removeEventListener('click', this._mcpPopupCloseHandler);
+            this._mcpPopupCloseHandler = null;
+        }
+    }
+
+    /**
+     * Show MCP debug stats in a toaster
+     */
+    showMcpDebugToast() {
+        const connected = this.isDesktopConnected();
+        const tools = this.getRegisteredTools();
+        const stats = {
+            connected,
+            connectedAt: this.mcpConnectedAt?.toISOString() || null,
+            toolCount: tools.length,
+            tools: tools.map(t => t.function?.name || t.name),
+            wsState: this.desktopWs?.readyState,
+            reconnectAttempts: this.desktopReconnectAttempts
+        };
+
+        // Create toaster
+        const toaster = document.createElement('div');
+        toaster.className = 'toaster synchub-debug-toast';
+        toaster.style.cssText = 'position: fixed; right: 20px; top: 20px; width: 400px; z-index: 9999; background: var(--background-primary); border: 1px solid var(--divider-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);';
+
+        toaster.innerHTML = `
+            <div style="position: absolute; right: 0px; top: 0px; padding: 8px">
+                <span class="ti ti-x synchub-toast-close" style="font-size: 16px; cursor: pointer; display: inline-block;"></span>
+            </div>
+            <div class="status--popout">
+                <div style="padding: 10px;">
+                    <h3 style="margin-top: 0px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px">
+                        <span class="ti ${connected ? 'ti-circle-check' : 'ti-circle-x'}" style="color: ${connected ? 'var(--text-status-online)' : 'var(--text-status-offline)'};"></span>
+                        MCP ${connected ? 'Connected' : 'Disconnected'}
+                    </h3>
+                </div>
+                <div style="padding: 10px; border-top: 1px solid var(--divider-color);">
+                    <div><b>🤓 Debug Stats</b></div>
+                    <div style="max-height: 250px; overflow-y: auto;">
+                        <pre style="user-select: text !important; font-size: 11px; margin: 10px 0 0 0;">${JSON.stringify(stats, null, 2)}</pre>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        toaster.querySelector('.synchub-toast-close').addEventListener('click', () => toaster.remove());
+
+        // Auto-close after 30s
+        setTimeout(() => toaster.remove(), 30000);
+
+        document.body.appendChild(toaster);
     }
 
     /**
