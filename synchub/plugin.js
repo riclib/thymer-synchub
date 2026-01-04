@@ -1376,7 +1376,11 @@ class Plugin extends CollectionPlugin {
             if (!journal) {
                 return { error: 'Journal not available' };
             }
-            await this.insertMarkdown(content, journal, null);
+            // Find last top-level item to append after
+            const lineItems = await journal.getLineItems?.() || [];
+            const topLevel = lineItems.filter(item => item.parent_guid === journal.guid);
+            const lastItem = topLevel.length > 0 ? topLevel[topLevel.length - 1] : null;
+            await this.insertMarkdown(content, journal, lastItem);
             return { success: true };
         } catch (e) {
             return { error: e.message };
