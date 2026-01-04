@@ -40,26 +40,124 @@ func (m *MCPServer) Start() error {
 	// Register tools from bridge
 	m.registerTools()
 
-	// Create HTTP handler
-	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+	// Create HTTP mux with both stateful and stateless endpoints
+	mux := http.NewServeMux()
+
+	// Stateful endpoint (with sessions) - for full MCP compliance
+	statefulHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		return m.server
 	}, nil)
+	mux.Handle("/mcp", statefulHandler)
+
+	// Stateless endpoint - simple JSON-RPC, no sessions
+	mux.HandleFunc("/", m.handleStateless)
 
 	// Start HTTP server
 	addr := fmt.Sprintf(":%d", m.port)
 	m.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: mux,
 	}
 
 	go func() {
-		log.Printf("[MCP] Server listening on http://127.0.0.1%s", addr)
+		log.Printf("[MCP] Server listening on http://127.0.0.1%s (stateless) and http://127.0.0.1%s/mcp (stateful)", addr, addr)
 		if err := m.httpServer.ListenAndServe(); err != http.ErrServerClosed {
 			log.Printf("[MCP] Server error: %v", err)
 		}
 	}()
 
 	return nil
+}
+
+// handleStateless handles MCP JSON-RPC without sessions
+func (m *MCPServer) handleStateless(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		JSONRPC string                 `json:"jsonrpc"`
+		ID      interface{}            `json:"id"`
+		Method  string                 `json:"method"`
+		Params  map[string]interface{} `json:"params"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		m.jsonRPCError(w, nil, -32700, "Parse error")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	switch req.Method {
+	case "initialize":
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"result": map[string]interface{}{
+				"protocolVersion": "2024-11-05",
+				"serverInfo":      map[string]string{"name": "thymer", "version": "0.1.0"},
+				"capabilities":    map[string]interface{}{"tools": map[string]bool{"listChanged": true}},
+			},
+		})
+
+	case "notifications/initialized":
+		// No response needed for notifications
+		w.WriteHeader(http.StatusNoContent)
+
+	case "tools/list":
+		tools := m.bridge.GetTools()
+		mcpTools := make([]map[string]interface{}, 0, len(tools))
+		for _, t := range tools {
+			inputSchema := map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+			if t.Parameters != nil {
+				inputSchema = t.Parameters
+			}
+			mcpTools = append(mcpTools, map[string]interface{}{
+				"name":        t.Name,
+				"description": t.Description,
+				"inputSchema": inputSchema,
+			})
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"result":  map[string]interface{}{"tools": mcpTools},
+		})
+
+	case "tools/call":
+		name, _ := req.Params["name"].(string)
+		args, _ := req.Params["arguments"].(map[string]interface{})
+		if name == "" {
+			m.jsonRPCError(w, req.ID, -32602, "Invalid params: name required")
+			return
+		}
+		structured, err := m.executeTool(name, args)
+		if err != nil {
+			m.jsonRPCError(w, req.ID, -32000, err.Error())
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      req.ID,
+			"result": map[string]interface{}{
+				"content":           []interface{}{},
+				"structuredContent": structured,
+			},
+		})
+
+	default:
+		m.jsonRPCError(w, req.ID, -32601, "Method not found: "+req.Method)
+	}
+}
+
+func (m *MCPServer) jsonRPCError(w http.ResponseWriter, id interface{}, code int, message string) {
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error":   map[string]interface{}{"code": code, "message": message},
+	})
 }
 
 func (m *MCPServer) registerTools() {
