@@ -1209,24 +1209,30 @@ class Plugin extends CollectionPlugin {
             {
                 type: 'function',
                 function: {
-                    name: 'get_active_record',
-                    description: 'Get the current page including its fields and body content.',
-                    parameters: { type: 'object', properties: {}, required: [] }
+                    name: 'get_note',
+                    description: 'Get a note by GUID. Returns title, fields, and body content.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            guid: { type: 'string', description: 'Note GUID (from search results)' }
+                        },
+                        required: ['guid']
+                    }
                 },
                 _core: true
             },
             {
                 type: 'function',
                 function: {
-                    name: 'write_to_active_record',
-                    description: 'Write markdown content to the currently active record.',
+                    name: 'append_to_note',
+                    description: 'Append markdown content to a note. Use search_workspace to find the GUID first.',
                     parameters: {
                         type: 'object',
                         properties: {
-                            content: { type: 'string', description: 'Markdown content to write' },
-                            mode: { type: 'string', enum: ['replace', 'prepend', 'append'], description: 'Write mode (default: prepend)' }
+                            guid: { type: 'string', description: 'Note GUID (from search results)' },
+                            content: { type: 'string', description: 'Markdown content to append' }
                         },
-                        required: ['content']
+                        required: ['guid', 'content']
                     }
                 },
                 _core: true
@@ -1271,10 +1277,10 @@ class Plugin extends CollectionPlugin {
                 return this.toolSearchWorkspace(args);
             case 'list_collections':
                 return this.toolListCollections();
-            case 'get_active_record':
-                return this.toolGetActiveRecord();
-            case 'write_to_active_record':
-                return this.toolWriteToActiveRecord(args);
+            case 'get_note':
+                return this.toolGetNote(args);
+            case 'append_to_note':
+                return this.toolAppendToNote(args);
             case 'log_to_journal':
                 return this.toolLogToJournal(args);
             case 'get_todays_journal':
@@ -1312,11 +1318,15 @@ class Plugin extends CollectionPlugin {
         return { collections };
     }
 
-    async toolGetActiveRecord() {
+    async toolGetNote({ guid }) {
         try {
-            const record = this.ui.getActivePanel()?.getActiveRecord();
+            if (!guid) {
+                return { error: 'GUID required' };
+            }
+
+            const record = await this.data.getRecordByGUID(guid);
             if (!record) {
-                return { error: 'No active record - open a document first' };
+                return { error: `Note not found: ${guid}` };
             }
 
             const props = record.getAllProperties?.() || [];
@@ -1330,9 +1340,8 @@ class Plugin extends CollectionPlugin {
             const body = lineItems
                 .filter(item => item.parent_guid === record.guid)
                 .map(item => item.segments?.map(s => {
-                    // Handle ref segments (they have object text with guid)
                     if (s.type === 'ref' && typeof s.text === 'object') {
-                        return `[[${s.text.guid}]]`;  // Return as link syntax
+                        return `[[${s.text.guid}]]`;
                     }
                     return s.text || '';
                 }).join('') || '')
@@ -1349,22 +1358,27 @@ class Plugin extends CollectionPlugin {
         }
     }
 
-    async toolWriteToActiveRecord({ content, mode = 'prepend' }) {
+    async toolAppendToNote({ guid, content }) {
         try {
-            const record = this.ui.getActivePanel()?.getActiveRecord();
+            if (!guid) {
+                return { error: 'GUID required' };
+            }
+            if (!content) {
+                return { error: 'Content required' };
+            }
+
+            const record = await this.data.getRecordByGUID(guid);
             if (!record) {
-                return { error: 'No active record' };
+                return { error: `Note not found: ${guid}` };
             }
 
-            if (mode === 'replace') {
-                await this.replaceContents(content, record);
-            } else {
-                // prepend or append - for now both use insertMarkdown
-                // TODO: implement actual prepend
-                await this.insertMarkdown(content, record, null);
-            }
+            // Find last top-level item to append after
+            const lineItems = await record.getLineItems?.() || [];
+            const topLevel = lineItems.filter(item => item.parent_guid === record.guid);
+            const lastItem = topLevel.length > 0 ? topLevel[topLevel.length - 1] : null;
 
-            return { success: true, mode };
+            await this.insertMarkdown(content, record, lastItem);
+            return { success: true, guid };
         } catch (e) {
             return { error: e.message };
         }
@@ -1833,12 +1847,18 @@ class Plugin extends CollectionPlugin {
                 indicator = '<span style="opacity: 0.4;">...</span>';
         }
 
+        // MCP connection indicator
+        const mcpConnected = this.isDesktopConnected();
+        const mcpIndicator = mcpConnected
+            ? '<span style="color: #a78bfa; margin-left: 4px;" title="MCP connected">⚡</span>'
+            : '';
+
         // Add CSS for spin animation if not already present
         const style = state === 'syncing'
             ? '<style>@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>'
             : '';
 
-        return `${style}<span style="font-size: 13px; opacity: 0.8;">⟳</span> ${indicator}${extra ? ' ' + extra : ''}`;
+        return `${style}<span style="font-size: 13px; opacity: 0.8;">⟳</span> ${indicator}${mcpIndicator}${extra ? ' ' + extra : ''}`;
     }
 
     /**
@@ -2064,6 +2084,9 @@ class Plugin extends CollectionPlugin {
                 // Push current tools and plugins
                 this._pushToolsToDesktop();
                 this._pushPluginsToDesktop();
+
+                // Update status bar to show MCP connected
+                this.updateStatusBar();
             };
 
             this.desktopWs.onmessage = (event) => {
@@ -2074,6 +2097,9 @@ class Plugin extends CollectionPlugin {
                 console.log('[SyncHub] Disconnected from Thymer Desktop');
                 const wasIntentional = this.desktopIntentionalClose;
                 this.desktopWs = null;
+
+                // Update status bar to show MCP disconnected
+                this.updateStatusBar();
 
                 // Don't reconnect if intentionally closed or if code 1000 (normal) / 1001 (going away)
                 // Code 1008 = policy violation (server closed us for new client)
