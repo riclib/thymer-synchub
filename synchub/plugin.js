@@ -286,6 +286,7 @@ class Plugin extends CollectionPlugin {
 
         // MCP status bar item
         this.mcpConnectedAt = null;
+        this.mcpActivityLog = []; // Track recent MCP calls
         this.mcpStatusBarItem = this.ui.addStatusBarItem({
             htmlLabel: this.buildMcpLabel(false),
             tooltip: 'MCP disconnected - Click to connect',
@@ -2011,13 +2012,13 @@ class Plugin extends CollectionPlugin {
             });
         }
 
-        // Divider + debug
+        // Divider + activity log
         options.push({ type: 'divider' });
         options.push({
             type: 'action',
-            icon: 'ti-bug',
-            label: 'Show Debug Stats 🤓',
-            action: () => this.showMcpDebugToast()
+            icon: 'ti-activity',
+            label: 'Activity Log',
+            action: () => this.showMcpActivityPopup()
         });
 
         this.mcpPopup = this.createCmdpalPopup(options, event);
@@ -2117,51 +2118,102 @@ class Plugin extends CollectionPlugin {
     }
 
     /**
-     * Show MCP debug stats in a toaster
+     * Show MCP activity log popup
      */
-    showMcpDebugToast() {
-        const connected = this.isDesktopConnected();
-        const tools = this.getRegisteredTools();
-        const stats = {
-            connected,
-            connectedAt: this.mcpConnectedAt?.toISOString() || null,
-            toolCount: tools.length,
-            tools: tools.map(t => t.function?.name || t.name),
-            wsState: this.desktopWs?.readyState,
-            reconnectAttempts: this.desktopReconnectAttempts
-        };
+    showMcpActivityPopup() {
+        // Remove existing
+        if (this.mcpActivityPopup) {
+            this.mcpActivityPopup.remove();
+            this.mcpActivityPopup = null;
+            return;
+        }
 
-        // Create toaster
-        const toaster = document.createElement('div');
-        toaster.className = 'toaster synchub-debug-toast';
-        toaster.style.cssText = 'position: fixed; right: 20px; top: 20px; width: 400px; z-index: 9999; background: var(--background-primary); border: 1px solid var(--divider-color); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);';
-
-        toaster.innerHTML = `
-            <div style="position: absolute; right: 0px; top: 0px; padding: 8px">
-                <span class="ti ti-x synchub-toast-close" style="font-size: 16px; cursor: pointer; display: inline-block;"></span>
-            </div>
-            <div class="status--popout">
-                <div style="padding: 10px;">
-                    <h3 style="margin-top: 0px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px">
-                        <span class="ti ${connected ? 'ti-circle-check' : 'ti-circle-x'}" style="color: ${connected ? 'var(--text-status-online)' : 'var(--text-status-offline)'};"></span>
-                        MCP ${connected ? 'Connected' : 'Disconnected'}
-                    </h3>
-                </div>
-                <div style="padding: 10px; border-top: 1px solid var(--divider-color);">
-                    <div><b>🤓 Debug Stats</b></div>
-                    <div style="max-height: 250px; overflow-y: auto;">
-                        <pre style="user-select: text !important; font-size: 11px; margin: 10px 0 0 0;">${JSON.stringify(stats, null, 2)}</pre>
-                    </div>
-                </div>
-            </div>
+        const popup = document.createElement('div');
+        popup.className = 'synchub-activity-popup';
+        popup.style.cssText = `
+            position: fixed;
+            right: 20px;
+            bottom: 50px;
+            width: 400px;
+            max-height: 350px;
+            z-index: 9999;
+            background: var(--background-primary);
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            font-size: 12px;
+            overflow: hidden;
         `;
 
-        toaster.querySelector('.synchub-toast-close').addEventListener('click', () => toaster.remove());
+        popup.innerHTML = `
+            <div style="padding: 8px 12px; border-bottom: 1px solid var(--divider-color); display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 600;"><span class="ti ti-activity" style="margin-right: 6px;"></span>MCP Activity</span>
+                <span class="ti ti-x synchub-activity-close" style="cursor: pointer; opacity: 0.6;"></span>
+            </div>
+            <div class="synchub-activity-log" style="max-height: 300px; overflow-y: auto; padding: 4px 0;"></div>
+        `;
 
-        // Auto-close after 30s
-        setTimeout(() => toaster.remove(), 30000);
+        popup.querySelector('.synchub-activity-close').addEventListener('click', () => {
+            this.mcpActivityPopup.remove();
+            this.mcpActivityPopup = null;
+        });
 
-        document.body.appendChild(toaster);
+        document.body.appendChild(popup);
+        this.mcpActivityPopup = popup;
+        this.updateMcpActivityPopup();
+    }
+
+    /**
+     * Update MCP activity popup content
+     */
+    updateMcpActivityPopup() {
+        if (!this.mcpActivityPopup) return;
+
+        const logEl = this.mcpActivityPopup.querySelector('.synchub-activity-log');
+        if (!logEl) return;
+
+        if (this.mcpActivityLog.length === 0) {
+            logEl.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No activity yet</div>';
+            return;
+        }
+
+        let html = '';
+        for (const entry of this.mcpActivityLog.slice(0, 20)) {
+            const statusIcon = entry.status === 'success' ? 'ti-check'
+                : entry.status === 'error' ? 'ti-x'
+                : 'ti-loader';
+            const statusColor = entry.status === 'success' ? 'var(--text-status-online)'
+                : entry.status === 'error' ? 'var(--text-status-offline)'
+                : 'var(--text-muted)';
+            const statusAnim = entry.status === 'pending' ? 'animation: spin 1s linear infinite;' : '';
+
+            // Truncate args for display
+            const argsStr = JSON.stringify(entry.args);
+            const argsShort = argsStr.length > 40 ? argsStr.slice(0, 40) + '...' : argsStr;
+
+            const timeStr = entry.timestamp.toLocaleTimeString();
+            const durationStr = entry.duration ? `${entry.duration}ms` : '';
+
+            html += `
+                <div style="padding: 6px 12px; border-bottom: 1px solid var(--divider-color); display: flex; align-items: center; gap: 8px;" title="${this.escapeHtml(argsStr)}${entry.error ? '\n\nError: ' + this.escapeHtml(entry.error) : ''}">
+                    <span class="ti ${statusIcon}" style="color: ${statusColor}; ${statusAnim} flex-shrink: 0;"></span>
+                    <span style="flex: 1; overflow: hidden;">
+                        <span style="font-weight: 500;">${entry.tool}</span>
+                        <span style="color: var(--text-muted); margin-left: 4px;">${this.escapeHtml(argsShort)}</span>
+                    </span>
+                    <span style="color: var(--text-muted); font-size: 10px; flex-shrink: 0;">${durationStr}</span>
+                </div>
+            `;
+        }
+
+        logEl.innerHTML = html;
+    }
+
+    /**
+     * Escape HTML for safe display
+     */
+    escapeHtml(str) {
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
     /**
@@ -2456,9 +2508,32 @@ class Plugin extends CollectionPlugin {
 
                 case 'tool_call':
                     this.flashMcpActivity();
+                    const callStart = Date.now();
+                    const logEntry = {
+                        id: msg.id,
+                        tool: msg.name,
+                        args: msg.args || {},
+                        timestamp: new Date(),
+                        status: 'pending'
+                    };
+                    this.mcpActivityLog.unshift(logEntry);
+                    if (this.mcpActivityLog.length > 50) this.mcpActivityLog.pop();
+                    this.updateMcpActivityPopup();
+
                     this.executeToolCall(msg.name, msg.args || {})
-                        .then(result => this._sendDesktopResponse(msg.id, result))
-                        .catch(err => this._sendDesktopError(msg.id, err.message));
+                        .then(result => {
+                            logEntry.status = 'success';
+                            logEntry.duration = Date.now() - callStart;
+                            this.updateMcpActivityPopup();
+                            this._sendDesktopResponse(msg.id, result);
+                        })
+                        .catch(err => {
+                            logEntry.status = 'error';
+                            logEntry.error = err.message;
+                            logEntry.duration = Date.now() - callStart;
+                            this.updateMcpActivityPopup();
+                            this._sendDesktopError(msg.id, err.message);
+                        });
                     break;
 
                 case 'sync':
