@@ -2065,7 +2065,7 @@ class Plugin extends CollectionPlugin {
                 html += `<div style="border-top: 1px solid var(--divider-color); margin: 6px 0;"></div>`;
             } else if (opt.type === 'action') {
                 const iconHtml = opt.icon ? `<span class="ti ${opt.icon}" style="margin-right: 8px;"></span>` : '<span style="width: 24px; display: inline-block;"></span>';
-                html += `<div class="synchub-popup-action" data-label="${opt.label}" style="padding: 6px 12px; display: flex; align-items: center; cursor: pointer; border-radius: 4px; margin: 0 4px;">${iconHtml}<span>${opt.label}</span></div>`;
+                html += `<div class="autocomplete--option synchub-popup-action" data-label="${opt.label}" style="padding: 6px 12px; display: flex; align-items: center; cursor: pointer;">${iconHtml}<span>${opt.label}</span></div>`;
             }
         }
 
@@ -2082,10 +2082,10 @@ class Plugin extends CollectionPlugin {
             });
 
             el.addEventListener('mouseenter', () => {
-                el.style.background = 'var(--background-secondary)';
+                el.classList.add('autocomplete--option-selected');
             });
             el.addEventListener('mouseleave', () => {
-                el.style.background = 'transparent';
+                el.classList.remove('autocomplete--option-selected');
             });
         });
 
