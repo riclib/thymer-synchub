@@ -1834,51 +1834,60 @@ class Plugin extends CollectionPlugin {
     // =========================================================================
 
     /**
-     * Build HTML label for status bar
+     * Build HTML label for SyncHub status bar (ti-server icon)
      */
     buildStatusLabel(state, extra = '') {
-        const icon = '↻'; // sync icon
-        let indicator;
+        const baseStyle = 'font-size: 16px;';
+        let style = '';
+        let iconStyle = baseStyle;
 
         switch (state) {
             case 'syncing':
-                // Spinning animation via CSS
-                indicator = '<span style="display: inline-block; animation: spin 1s linear infinite; color: #60a5fa;">↻</span>';
+                // Glow animation for syncing
+                style = `<style>
+                    @keyframes syncGlow {
+                        0%, 100% { filter: drop-shadow(0 0 2px #60a5fa); opacity: 1; }
+                        50% { filter: drop-shadow(0 0 6px #60a5fa); opacity: 0.8; }
+                    }
+                </style>`;
+                iconStyle = `${baseStyle} color: #60a5fa; animation: syncGlow 1s ease-in-out infinite;`;
                 break;
             case 'error':
-                indicator = '<span style="color: #f87171;">●</span>';
+                iconStyle = `${baseStyle} color: #f87171;`;
                 break;
             case 'idle':
-                indicator = '<span style="color: #4ade80;">●</span>';
+                iconStyle = `${baseStyle} color: #4ade80;`;
                 break;
             case 'disabled':
-                indicator = '<span style="opacity: 0.4;">○</span>';
+                iconStyle = `${baseStyle} opacity: 0.4;`;
                 break;
             default:
-                indicator = '<span style="opacity: 0.4;">...</span>';
+                iconStyle = `${baseStyle} opacity: 0.4;`;
         }
 
-        // Add CSS for spin animation if not already present
-        const style = state === 'syncing'
-            ? '<style>@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>'
-            : '';
-
-        return `${style}<span style="font-size: 13px; opacity: 0.8;">⟳</span> ${indicator}${extra ? ' ' + extra : ''}`;
+        return `${style}<span class="ti ti-server" style="${iconStyle}"></span>`;
     }
 
     /**
-     * Build HTML label for MCP status bar
+     * Build HTML label for MCP status bar (ti-wand icon)
      */
     buildMcpLabel(connected, active = false) {
+        const baseStyle = 'font-size: 16px;';
+
         if (connected) {
             if (active) {
-                // Blink animation for activity
-                return `<style>@keyframes mcpBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }</style>
-                    <span style="opacity: 0.8;">MCP</span> <span style="color: #4ade80; animation: mcpBlink 0.15s ease-in-out;">●</span>`;
+                // Glow animation for activity
+                return `<style>
+                    @keyframes mcpGlow {
+                        0% { filter: drop-shadow(0 0 2px #a78bfa); }
+                        100% { filter: drop-shadow(0 0 8px #a78bfa) drop-shadow(0 0 12px #a78bfa); }
+                    }
+                </style>
+                <span class="ti ti-wand" style="${baseStyle} color: #a78bfa; animation: mcpGlow 0.15s ease-out;"></span>`;
             }
-            return '<span style="opacity: 0.8;">MCP</span> <span style="color: #4ade80;">●</span>';
+            return `<span class="ti ti-wand" style="${baseStyle} color: #a78bfa;"></span>`;
         } else {
-            return '<span style="opacity: 0.4; text-decoration: line-through;">MCP</span>';
+            return `<span class="ti ti-wand" style="${baseStyle} opacity: 0.3;"></span>`;
         }
     }
 
@@ -1888,7 +1897,7 @@ class Plugin extends CollectionPlugin {
     flashMcpActivity() {
         if (!this.mcpStatusBarItem || !this.isDesktopConnected()) return;
 
-        // Show active state
+        // Show active state with glow
         this.mcpStatusBarItem.setHtmlLabel(this.buildMcpLabel(true, true));
 
         // Return to idle after flash
