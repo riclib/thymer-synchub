@@ -1245,6 +1245,19 @@ class Plugin extends CollectionPlugin {
                     }
                 },
                 _core: true
+            },
+            {
+                type: 'function',
+                function: {
+                    name: 'get_todays_journal',
+                    description: 'Get today\'s journal/daily note content. Note: late night (2-3am) may still return yesterday\'s journal if the user hasn\'t created today\'s yet.',
+                    parameters: {
+                        type: 'object',
+                        properties: {},
+                        required: []
+                    }
+                },
+                _core: true
             }
         ];
     }
@@ -1264,6 +1277,8 @@ class Plugin extends CollectionPlugin {
                 return this.toolWriteToActiveRecord(args);
             case 'log_to_journal':
                 return this.toolLogToJournal(args);
+            case 'get_todays_journal':
+                return this.toolGetTodaysJournal();
             default:
                 return null; // Not a core tool
         }
@@ -1363,6 +1378,43 @@ class Plugin extends CollectionPlugin {
             }
             await this.insertMarkdown(content, journal, null);
             return { success: true };
+        } catch (e) {
+            return { error: e.message };
+        }
+    }
+
+    async toolGetTodaysJournal() {
+        try {
+            const journal = await this.getTodayJournalRecord();
+            if (!journal) {
+                return { error: 'No journal found for today. Open your daily note first to create it.' };
+            }
+
+            const props = journal.getAllProperties?.() || [];
+            const fields = {};
+            for (const prop of props) {
+                const value = prop.choice?.() || prop.text?.() || prop.number?.() || null;
+                if (value) fields[prop.name || prop.id] = value;
+            }
+
+            const lineItems = await journal.getLineItems?.() || [];
+            const body = lineItems
+                .filter(item => item.parent_guid === journal.guid)
+                .map(item => item.segments?.map(s => {
+                    if (s.type === 'ref' && typeof s.text === 'object') {
+                        return `[[${s.text.guid}]]`;
+                    }
+                    return s.text || '';
+                }).join('') || '')
+                .join('\n');
+
+            return {
+                guid: journal.guid,
+                title: journal.getName?.() || 'Today',
+                date: journal.guid.slice(-8), // YYYYMMDD from GUID
+                fields,
+                body: body || '(empty)'
+            };
         } catch (e) {
             return { error: e.message };
         }
