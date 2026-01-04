@@ -2028,78 +2028,65 @@ class Plugin extends CollectionPlugin {
      */
     createCmdpalPopup(options, event) {
         const popup = document.createElement('div');
-        popup.className = 'cmdpal--inline animate-open active focused-component dropdown synchub-mcp-popup';
-        popup.style.cssText = 'position: fixed; width: 280px; z-index: 9999;';
+        popup.className = 'synchub-mcp-popup';
+        popup.style.cssText = `
+            position: fixed;
+            width: 260px;
+            z-index: 9999;
+            background: var(--background-primary);
+            border: 1px solid var(--divider-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            padding: 8px 0;
+            font-size: 13px;
+        `;
 
-        // Position near the click
+        // Position near the click (above the status bar)
         const rect = event?.target?.getBoundingClientRect?.();
         if (rect) {
-            popup.style.bottom = `${window.innerHeight - rect.top + 5}px`;
-            popup.style.left = `${rect.left}px`;
+            popup.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+            popup.style.left = `${Math.max(10, rect.left - 100)}px`;
         } else {
-            popup.style.bottom = '40px';
+            popup.style.bottom = '50px';
             popup.style.right = '20px';
         }
 
-        let html = '<div class="autocomplete clickable" style="position: relative; overflow: hidden;">';
-        html += '<div style="padding: 0;">';
+        let html = '';
 
-        let idx = 0;
         for (const opt of options) {
-            const yPos = idx * 30;
-
             if (opt.type === 'heading') {
-                html += `<div data-idx="${idx}" class="autocomplete-divider-heading autocomplete--empty" style="transform: translateY(${yPos}px); position: absolute; width: 100%;">
-                    <span class="autocomplete--option-icon"></span>
-                    <span class="autocomplete--option-label">${opt.label}</span>
-                </div>`;
+                html += `<div style="padding: 6px 12px; font-weight: 600; color: var(--text-muted); font-size: 11px; text-transform: uppercase;">${opt.label}</div>`;
             } else if (opt.type === 'info') {
                 const iconHtml = opt.icon
-                    ? `<span class="ti ${opt.icon}" style="${opt.iconColor ? `color: ${opt.iconColor};` : ''}"></span>`
-                    : '';
-                html += `<div data-idx="${idx}" class="autocomplete--empty" style="transform: translateY(${yPos}px); position: absolute; width: 100%;">
-                    <span class="autocomplete--option-icon">${iconHtml}</span>
-                    <span class="autocomplete--option-label">${opt.label}</span>
-                </div>`;
+                    ? `<span class="ti ${opt.icon}" style="margin-right: 8px; ${opt.iconColor ? `color: ${opt.iconColor};` : ''}"></span>`
+                    : '<span style="width: 24px; display: inline-block;"></span>';
+                html += `<div style="padding: 6px 12px; display: flex; align-items: center;">${iconHtml}<span>${opt.label}</span></div>`;
             } else if (opt.type === 'divider') {
-                html += `<div data-idx="${idx}" class="autocomplete--divider autocomplete--empty" style="transform: translateY(${yPos}px); position: absolute; width: 100%; height: 5px;"></div>`;
-                idx -= 0.8; // dividers are shorter
+                html += `<div style="border-top: 1px solid var(--divider-color); margin: 6px 0;"></div>`;
             } else if (opt.type === 'action') {
-                const iconHtml = opt.icon ? `<span class="ti ${opt.icon}"></span>` : '';
-                html += `<div data-idx="${idx}" data-action="${idx}" class="autocomplete--option" style="transform: translateY(${yPos}px); position: absolute; width: 100%; cursor: pointer;">
-                    <span class="autocomplete--option-icon">${iconHtml}</span>
-                    <span class="autocomplete--option-label">${opt.label}</span>
-                </div>`;
+                const iconHtml = opt.icon ? `<span class="ti ${opt.icon}" style="margin-right: 8px;"></span>` : '<span style="width: 24px; display: inline-block;"></span>';
+                html += `<div class="synchub-popup-action" data-label="${opt.label}" style="padding: 6px 12px; display: flex; align-items: center; cursor: pointer; border-radius: 4px; margin: 0 4px;">${iconHtml}<span>${opt.label}</span></div>`;
             }
-            idx++;
         }
 
-        const height = Math.min(idx * 30 + 10, 300);
-        html += `</div></div>`;
         popup.innerHTML = html;
-        popup.style.height = `${height}px`;
 
-        // Add click handlers for actions
-        popup.querySelectorAll('[data-action]').forEach((el, i) => {
-            const actionIdx = parseInt(el.dataset.action);
-            const opt = options.find((o, oi) => o.type === 'action' && options.slice(0, oi + 1).filter(x => x.type === 'action').length === Math.floor(actionIdx - options.filter((x, xi) => xi < actionIdx && x.type !== 'action').length) + 1);
+        // Add click handlers and hover effects for actions
+        popup.querySelectorAll('.synchub-popup-action').forEach(el => {
+            const label = el.dataset.label;
+            const opt = options.find(o => o.type === 'action' && o.label === label);
 
             el.addEventListener('click', () => {
-                // Find the actual action
-                let actionCount = 0;
-                for (const o of options) {
-                    if (o.type === 'action') {
-                        if (el.textContent.includes(o.label)) {
-                            o.action?.();
-                            this.closeMcpPopup();
-                            return;
-                        }
-                    }
-                }
+                opt?.action?.();
+                this.closeMcpPopup();
             });
 
-            el.addEventListener('mouseenter', () => el.classList.add('autocomplete--option-selected'));
-            el.addEventListener('mouseleave', () => el.classList.remove('autocomplete--option-selected'));
+            el.addEventListener('mouseenter', () => {
+                el.style.background = 'var(--background-secondary)';
+            });
+            el.addEventListener('mouseleave', () => {
+                el.style.background = 'transparent';
+            });
         });
 
         // Close on click outside
