@@ -277,11 +277,19 @@ class Plugin extends CollectionPlugin {
         // Track currently syncing plugin for status bar
         this.currentlySyncing = null;
 
-        // Status bar item
+        // Status bar item for sync status
         this.statusBarItem = this.ui.addStatusBarItem({
             htmlLabel: this.buildStatusLabel('idle'),
             tooltip: 'Sync Hub - Initializing...',
             onClick: () => this.onStatusBarClick()
+        });
+
+        // MCP status bar item
+        this.mcpConnectedAt = null;
+        this.mcpStatusBarItem = this.ui.addStatusBarItem({
+            htmlLabel: this.buildMcpLabel(false),
+            tooltip: 'MCP disconnected - Click to connect',
+            onClick: () => this.onMcpStatusBarClick()
         });
 
         // Command palette: Paste Markdown
@@ -335,6 +343,9 @@ class Plugin extends CollectionPlugin {
         }
         if (this.statusBarItem) {
             this.statusBarItem.remove();
+        }
+        if (this.mcpStatusBarItem) {
+            this.mcpStatusBarItem.remove();
         }
         if (this.statusBarRefreshInterval) {
             clearInterval(this.statusBarRefreshInterval);
@@ -1847,18 +1858,51 @@ class Plugin extends CollectionPlugin {
                 indicator = '<span style="opacity: 0.4;">...</span>';
         }
 
-        // MCP connection indicator
-        const mcpConnected = this.isDesktopConnected();
-        const mcpIndicator = mcpConnected
-            ? '<span style="color: #a78bfa; margin-left: 4px;" title="MCP connected">⚡</span>'
-            : '';
-
         // Add CSS for spin animation if not already present
         const style = state === 'syncing'
             ? '<style>@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>'
             : '';
 
-        return `${style}<span style="font-size: 13px; opacity: 0.8;">⟳</span> ${indicator}${mcpIndicator}${extra ? ' ' + extra : ''}`;
+        return `${style}<span style="font-size: 13px; opacity: 0.8;">⟳</span> ${indicator}${extra ? ' ' + extra : ''}`;
+    }
+
+    /**
+     * Build HTML label for MCP status bar
+     */
+    buildMcpLabel(connected) {
+        if (connected) {
+            return '<span style="opacity: 0.8;">MCP</span> <span style="color: #4ade80;">●</span>';
+        } else {
+            return '<span style="opacity: 0.4; text-decoration: line-through;">MCP</span>';
+        }
+    }
+
+    /**
+     * Update MCP status bar
+     */
+    updateMcpStatusBar() {
+        if (!this.mcpStatusBarItem) return;
+
+        const connected = this.isDesktopConnected();
+        this.mcpStatusBarItem.setHtmlLabel(this.buildMcpLabel(connected));
+
+        if (connected) {
+            const toolCount = this.getRegisteredTools().length;
+            const duration = this.mcpConnectedAt
+                ? this.formatRelativeTime(this.mcpConnectedAt)
+                : 'just now';
+            this.mcpStatusBarItem.setTooltip(`MCP connected (${toolCount} tools) - Connected ${duration}`);
+        } else {
+            this.mcpStatusBarItem.setTooltip('MCP disconnected - Click to connect this window');
+        }
+    }
+
+    /**
+     * Handle MCP status bar click - connect/force reconnect
+     */
+    onMcpStatusBarClick() {
+        // Force connect to desktop (will disconnect other windows)
+        this.connectToDesktop();
     }
 
     /**
@@ -2074,6 +2118,7 @@ class Plugin extends CollectionPlugin {
             this.desktopWs.onopen = () => {
                 console.log('[SyncHub] Connected to Thymer Desktop');
                 this.desktopReconnectAttempts = 0;
+                this.mcpConnectedAt = new Date();
 
                 // Register ourselves
                 this.desktopWs.send(JSON.stringify({
@@ -2085,8 +2130,8 @@ class Plugin extends CollectionPlugin {
                 this._pushToolsToDesktop();
                 this._pushPluginsToDesktop();
 
-                // Update status bar to show MCP connected
-                this.updateStatusBar();
+                // Update MCP status bar
+                this.updateMcpStatusBar();
             };
 
             this.desktopWs.onmessage = (event) => {
@@ -2097,9 +2142,10 @@ class Plugin extends CollectionPlugin {
                 console.log('[SyncHub] Disconnected from Thymer Desktop');
                 const wasIntentional = this.desktopIntentionalClose;
                 this.desktopWs = null;
+                this.mcpConnectedAt = null;
 
-                // Update status bar to show MCP disconnected
-                this.updateStatusBar();
+                // Update MCP status bar
+                this.updateMcpStatusBar();
 
                 // Don't reconnect if intentionally closed or if code 1000 (normal) / 1001 (going away)
                 // Code 1008 = policy violation (server closed us for new client)
