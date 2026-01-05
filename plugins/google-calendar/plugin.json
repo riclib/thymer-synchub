@@ -6,9 +6,10 @@
   "author": "Thymer",
   "icon": "ti-calendar",
   "type": "app",
-  "requires": ["Sync Hub", "Events collection"],
+  "requires": [ "Sync Hub", "Events collection" ],
   "config_format": {
     "refresh_token": "OAuth refresh token from thymer-auth",
-    "token_endpoint": "Token refresh URL (auto-filled by thymer-auth)"
+    "token_endpoint": "Token refresh URL (auto-filled by thymer-auth)",
+    "family_id": "Google Calendar ID (e.g. family123@group.calendar.google.com)"
   }
 }

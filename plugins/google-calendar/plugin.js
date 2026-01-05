@@ -200,6 +200,18 @@ class Plugin extends AppPlugin {
             return { summary: 'Not configured', created: 0, updated: 0, changes: [] };
         }
 
+        // Family ID (optional)
+        const configJson = myRecord.text('config');
+        let familyIdFromConfig = null;
+        try {
+            if (configJson) {
+                const config = JSON.parse(configJson);
+                familyIdFromConfig = config.family_id; // Här läser vi in ditt ID
+            }
+        } catch (e) {
+            debug('Kunde inte läsa family_id från config');
+        }
+
         // Token field contains refresh_token and token_endpoint
         const tokenJson = myRecord.text('token');
         const lastRun = myRecord.prop('last_run')?.date();
@@ -260,10 +272,10 @@ class Plugin extends AppPlugin {
 
         // Fetch events
         try {
-            const events = await this.fetchEvents(accessToken, timeMin, timeMax, { log, debug });
+            const events = await this.fetchEvents(accessToken, timeMin, timeMax, familyIdFromConfig, { log, debug });
             debug(`Fetched ${events.length} events`);
 
-            const result = await this.processEvents(events, calendarCollection, data, { log, debug });
+            const result = await this.processEvents(events, calendarCollection, data, familyIdFromConfig, { log, debug });
 
             const summary = result.created > 0 || result.updated > 0
                 ? `${result.created} new, ${result.updated} updated`
@@ -317,35 +329,48 @@ class Plugin extends AppPlugin {
     // Google Calendar API
     // =========================================================================
 
-    async fetchEvents(accessToken, timeMin, timeMax, { log, debug }) {
-        const params = new URLSearchParams({
-            timeMin: timeMin.toISOString(),
-            timeMax: timeMax.toISOString(),
-            singleEvents: 'true', // Expand recurring events
-            orderBy: 'startTime',
-            maxResults: '250',
-        });
+    async fetchEvents(accessToken, timeMin, timeMax, familyId, { log, debug }) {
 
-        const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`;
+        const calendarIds = ['primary'];
 
-        const response = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${accessToken}` },
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Calendar API error: ${response.status} ${errorText}`);
+        if (familyId && familyId.trim() !== '') {
+            calendarIds.push(familyId.trim());
         }
 
-        const data = await response.json();
-        return data.items || [];
+        let allEvents = [];
+
+        for (const calId of calendarIds) {
+            debug(`Fetching events for calendar: ${calId}`);
+            const params = new URLSearchParams({
+                timeMin: timeMin.toISOString(),
+                timeMax: timeMax.toISOString(),
+                singleEvents: 'true',
+                orderBy: 'startTime',
+                maxResults: '250',
+            });
+
+            const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?${params}`;
+            const response = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${accessToken}` },
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                // Vi sparar calId (t.ex. det långa ID:t) på varje event
+                const items = (data.items || []).map(item => ({ ...item, _calendarSource: calId }));
+                allEvents = allEvents.concat(items);
+            } else {
+                log(`Could not fetch calendar ${calId}: ${response.status}`);
+            }
+        }
+        return allEvents;
     }
 
     // =========================================================================
     // Event Processing
     // =========================================================================
 
-    async processEvents(events, calendarCollection, data, { log, debug }) {
+    async processEvents(events, calendarCollection, data, familyId, { log, debug }) {
         let created = 0;
         let updated = 0;
         const changes = [];
@@ -382,7 +407,7 @@ class Plugin extends AppPlugin {
                 external_id: externalId,
                 title: event.summary || 'Untitled Event',
                 source: 'google',
-                calendar: 'primary', // TODO: support multiple calendars
+                calendar: event._calendarSource === 'primary' ? 'primary' : 'family',
                 status: status,
                 time_period: timePeriod,
                 location: event.location || '',
