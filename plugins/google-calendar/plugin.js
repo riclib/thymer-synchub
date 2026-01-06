@@ -246,7 +246,6 @@ class Plugin extends AppPlugin {
         const now = new Date();
         let timeMin, timeMax;
 
-        // DEFINIERA OM DET ÄR EN FULL SYNC
         const isFullSync = !lastRun || this.forceFullSync;
 
         if (!isFullSync) {
