@@ -623,11 +623,10 @@ class Plugin extends AppPlugin {
      * More reliable than comparing Google's updated timestamp.
      */
     hasContentChanged(existingRecord, newData) {
-        // 1. Jämför titel (Viktigt!)
+
         const currentTitle = existingRecord.text('title') || (existingRecord.getName ? existingRecord.getName() : '');
         if (currentTitle !== newData.title) return true;
 
-        // 2. Jämför enkla textfält
         const fieldsToCompare = ['location', 'status', 'description', 'calendar', 'all_day'];
         for (const field of fieldsToCompare) {
             const current = existingRecord.text(field);
@@ -635,7 +634,6 @@ class Plugin extends AppPlugin {
             if (current !== newVal) return true;
         }
 
-        // 3. Jämför tid (time_period)
         const currentPeriod = existingRecord.prop('time_period');
         if (currentPeriod) {
             const currentStart = currentPeriod.date();
