@@ -200,13 +200,11 @@ class Plugin extends AppPlugin {
             return { summary: 'Not configured', created: 0, updated: 0, changes: [] };
         }
 
-        // Parse config for additional calendars
         const configJson = myRecord.text('config');
-        let calendarsMapping = { 'primary': 'Primary' }; // Always include primary
+        let calendarsMapping = { 'primary': 'Primary' };
         try {
             if (configJson) {
                 const config = JSON.parse(configJson);
-                // Support calendars mapping: {"calendar_id": "Label", ...}
                 if (config.calendars && typeof config.calendars === 'object') {
                     calendarsMapping = { ...calendarsMapping, ...config.calendars };
                 }
@@ -215,7 +213,6 @@ class Plugin extends AppPlugin {
             debug('Could not parse config JSON');
         }
 
-        // Token field contains refresh_token and token_endpoint
         const tokenJson = myRecord.text('token');
         const lastRun = myRecord.prop('last_run')?.date();
 
@@ -232,12 +229,6 @@ class Plugin extends AppPlugin {
             return { summary: 'Invalid token', created: 0, updated: 0, changes: [] };
         }
 
-        if (!tokenData.refresh_token || !tokenData.token_endpoint) {
-            log('Token missing refresh_token or token_endpoint');
-            return { summary: 'Invalid token', created: 0, updated: 0, changes: [] };
-        }
-
-        // Get fresh access token from thymer-auth
         let accessToken;
         try {
             accessToken = await this.getAccessToken(tokenData, { log, debug });
@@ -246,39 +237,38 @@ class Plugin extends AppPlugin {
             return { summary: 'Auth failed', created: 0, updated: 0, changes: [] };
         }
 
-        // Find Calendar collection
         const calendarCollection = collections.find(c => c.getName() === 'Calendar');
-
         if (!calendarCollection) {
             log('Calendar collection not found');
             return { summary: 'Calendar collection not found', created: 0, updated: 0, changes: [] };
         }
 
-        // Determine sync window
-        // For incremental: sync since last_run
-        // For full: sync past 7 days + future 30 days
         const now = new Date();
         let timeMin, timeMax;
 
-        if (lastRun && !this.forceFullSync) {
-            // Incremental: events updated since last run
-            // But Google Calendar doesn't have 'updatedMin' for events list
-            // So we fetch a rolling window and let dedup handle it
+        // DEFINIERA OM DET ÄR EN FULL SYNC
+        const isFullSync = !lastRun || this.forceFullSync;
+
+        if (!isFullSync) {
             debug(`Incremental sync since: ${lastRun.toISOString()}`);
-            timeMin = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // 7 days ago
-            timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days ahead
+            timeMin = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
         } else {
             debug('Full sync');
-            timeMin = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
-            timeMax = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000); // 90 days ahead
+            timeMin = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            timeMax = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
         }
 
-        // Fetch events
         try {
             const events = await this.fetchEvents(accessToken, timeMin, timeMax, calendarsMapping, { log, debug });
             debug(`Fetched ${events.length} events`);
 
-            const result = await this.processEvents(events, calendarCollection, data, calendarsMapping, { log, debug });
+            // SKICKA MED isFullSync HÄR
+            const result = await this.processEvents(events, calendarCollection, data, calendarsMapping, {
+                log,
+                debug,
+                isFullSync
+            });
 
             const summary = result.created > 0 || result.updated > 0
                 ? `${result.created} new, ${result.updated} updated`
@@ -373,39 +363,33 @@ class Plugin extends AppPlugin {
     // Event Processing
     // =========================================================================
 
-    async processEvents(events, calendarCollection, data, calendarsMapping, { log, debug }) {
+    async processEvents(events, calendarCollection, data, calendarsMapping, { log, debug, isFullSync }) {
         let created = 0;
         let updated = 0;
         const changes = [];
-        const recurringGroups = new Map(); // Track recurring event instances
+        const recurringGroups = new Map();
 
         const existingRecords = await calendarCollection.getAllRecords();
 
+                const fetchedExternalIds = new Set(events.map(event => `gcal_${event.id}`));
+
         for (const event of events) {
-            // Skip cancelled events
-            if (event.status === 'cancelled') {
-                continue;
-            }
+            if (event.status === 'cancelled') continue;
 
             const externalId = `gcal_${event.id}`;
             const existingRecord = existingRecords.find(r => r.text('external_id') === externalId);
             const isRecurring = !!event.recurringEventId;
 
-            // Parse event times using Thymer's DateTime class for proper range support
-            const isAllDay = !!event.start?.date; // All-day events use 'date', not 'dateTime'
+            const isAllDay = !!event.start?.date;
             const timePeriod = this.buildTimePeriod(event, isAllDay);
 
-            // Build attendees list
             const attendees = (event.attendees || [])
-                .filter(a => !a.self) // Exclude self
+                .filter(a => !a.self)
                 .map(a => a.displayName || a.email)
-                .slice(0, 5) // Limit to first 5
+                .slice(0, 5)
                 .join(', ');
 
-            // Extract Google Meet link from conferenceData
             const meetLink = event.conferenceData?.entryPoints?.find(e => e.entryPointType === 'video')?.uri || '';
-
-            // Map Google Calendar status to our status field
             const status = event.status === 'tentative' ? 'tentative' : 'confirmed';
 
             const eventData = {
@@ -421,13 +405,16 @@ class Plugin extends AppPlugin {
                 url: event.htmlLink || '',
                 all_day: isAllDay ? 'Yes' : 'No',
                 description: event.description || '',
-                // For change detection
                 updated_at: event.updated,
+                
+                start: event.start?.dateTime || event.start?.date,
+                end: event.end?.dateTime || event.end?.date
             };
 
             if (existingRecord) {
-                // Check if actual content changed (not just Google's updated timestamp)
                 if (this.hasContentChanged(existingRecord, eventData)) {
+                    
+                    this.setField(existingRecord, 'title', eventData.title);
                     this.updateRecord(existingRecord, eventData);
                     updated++;
                     debug(`Updated: ${eventData.title}`);
@@ -463,7 +450,37 @@ class Plugin extends AppPlugin {
             }
         }
 
-        // Collapse recurring events into single change entries
+        
+        if (isFullSync) {
+            debug("Full sync: Checking for events removed from Google Calendar...");
+
+            for (const record of existingRecords) {
+                const extId = record.text('external_id');
+
+                if (extId && extId.startsWith('gcal_') && !fetchedExternalIds.has(extId)) {
+                    const currentTitle = record.text('title') || (record.getName ? record.getName() : '');
+
+                    
+                    if (currentTitle && !currentTitle.startsWith('[REMOVED]')) {
+                        const newTitle = `[REMOVED] ${currentTitle}`;
+
+                        this.setField(record, 'title', newTitle);
+                        this.setField(record, 'status', 'cancelled');
+
+                        updated++;
+                        debug(`Marked as removed: ${currentTitle}`);
+
+                        changes.push({
+                            verb: 'updated', 
+                            title: newTitle,
+                            guid: record.guid,
+                            major: false,
+                        });
+                    }
+                }
+            }
+        }
+                
         for (const [recurringId, group] of recurringGroups) {
             const countText = group.count > 1 ? `${group.count} instances of ` : '';
             changes.push({
@@ -607,37 +624,35 @@ class Plugin extends AppPlugin {
      * More reliable than comparing Google's updated timestamp.
      */
     hasContentChanged(existingRecord, newData) {
-        // Compare title
-        if (existingRecord.getName() !== newData.title) return true;
+        // 1. Jämför titel (Viktigt!)
+        const currentTitle = existingRecord.text('title') || (existingRecord.getName ? existingRecord.getName() : '');
+        if (currentTitle !== newData.title) return true;
 
-        // Compare key fields
-        const fieldsToCompare = ['location', 'status', 'calendar', 'attendees', 'meet_link'];
+        // 2. Jämför enkla textfält
+        const fieldsToCompare = ['location', 'status', 'description', 'calendar', 'all_day'];
         for (const field of fieldsToCompare) {
-            const current = existingRecord.text(field) || '';
-            const newVal = newData[field] || '';
+            const current = existingRecord.text(field);
+            const newVal = newData[field];
             if (current !== newVal) return true;
         }
 
-        // Compare time_period (stored as Thymer DateTime range)
+        // 3. Jämför tid (time_period)
         const currentPeriod = existingRecord.prop('time_period');
         if (currentPeriod) {
             const currentStart = currentPeriod.date();
             const currentEnd = currentPeriod.endDate?.();
 
-            // Compare start times
             if (currentStart && newData.start) {
                 const newStart = new Date(newData.start);
                 if (currentStart.getTime() !== newStart.getTime()) return true;
             }
 
-            // Compare end times
             if (currentEnd && newData.end) {
                 const newEnd = new Date(newData.end);
                 if (currentEnd.getTime() !== newEnd.getTime()) return true;
             }
         }
 
-        // No meaningful changes detected
         return false;
     }
 
