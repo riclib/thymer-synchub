@@ -212,7 +212,26 @@ class Plugin extends AppPlugin {
         const lastRun = myRecord.prop('last_run')?.date();
         if (!tokenJson) return { summary: 'Not connected', created: 0, updated: 0, changes: [] };
 
-        let accessToken = await this.getAccessToken(JSON.parse(tokenJson), { log, debug });
+        let tokenData;
+        try {
+            tokenData = JSON.parse(tokenJson);
+        } catch (e) {
+            log('Invalid token JSON');
+            return { summary: 'Invalid token', created: 0, updated: 0, changes: [] };
+        }
+
+        if (!tokenData.refresh_token || !tokenData.token_endpoint) {
+            log('Token missing refresh_token or token_endpoint');
+            return { summary: 'Invalid token', created: 0, updated: 0, changes: [] };
+        }
+
+        let accessToken;
+        try {
+            accessToken = await this.getAccessToken(tokenData, { log, debug });
+        } catch (e) {
+            log(`Token refresh failed: ${e.message}`);
+            return { summary: 'Auth failed', created: 0, updated: 0, changes: [] };
+        }
 
         // 4. Find the Calendar collection
         const calendarCollection = collections.find(c => c.getName() === 'Calendar');
@@ -250,11 +269,11 @@ class Plugin extends AppPlugin {
                     const extId = record.text('external_id');
                     const currentTitle = record.text('title') || record.getName() || '';
 
-                    if (extId && !fetchedIds.has(extId) && !currentTitle.startsWith('[X]')) {
+                    if (extId && !fetchedIds.has(extId) && !currentTitle.startsWith('🗑 ')) {
                         // We modify ONLY the specific fields we want to change.
                         // This leaves time, location, attendees, and description untouched.
 
-                        const flaggedTitle = `[X] ${currentTitle}`;
+                        const flaggedTitle = `🗑 ${currentTitle}`;
 
                         // 1. Update the title field
                         this.setField(record, 'title', flaggedTitle);
