@@ -250,26 +250,25 @@ class Plugin extends AppPlugin {
                     const extId = record.text('external_id');
                     const currentTitle = record.text('title') || record.getName() || '';
 
-                    // If it belongs to Google and is missing from fetch, and not already flagged
                     if (extId && !fetchedIds.has(extId) && !currentTitle.startsWith('[X]')) {
+                        // We modify ONLY the specific fields we want to change.
+                        // This leaves time, location, attendees, and description untouched.
+
                         const flaggedTitle = `[X] ${currentTitle}`;
 
-                        // Fix: Pass a simple object instead of using toObject()
-                        // We only need to provide the fields that setRecordFields expects
+                        // 1. Update the title field
+                        this.setField(record, 'title', flaggedTitle);
 
-                        // Get the existing time value to prevent it from being cleared
-                        const existingTime = record.prop('time_period')?.datetime()?.value();
+                        // 2. Update the record name for the UI
+                        if (typeof record.setName === 'function') {
+                            record.setName(flaggedTitle);
+                        }
 
-                        this.setRecordFields(record, {
-                            title: flaggedTitle,
-                            status: 'cancelled',
-                            time_period: existingTime, // Keep the original time
-                            external_id: extId,
-                            source: 'google'
-                        });
+                        // 3. Update the status
+                        this.setField(record, 'status', 'cancelled');
 
                         flaggedCount++;
-                        debug(`Flagged deleted event: ${currentTitle}`);
+                        debug(`Flagged deleted event: ${currentTitle} (all other data preserved)`);
                     }
                 }
             }
