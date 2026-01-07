@@ -256,9 +256,14 @@ class Plugin extends AppPlugin {
 
                         // Fix: Pass a simple object instead of using toObject()
                         // We only need to provide the fields that setRecordFields expects
+
+                        // Get the existing time value to prevent it from being cleared
+                        const existingTime = record.prop('time_period')?.datetime()?.value();
+
                         this.setRecordFields(record, {
                             title: flaggedTitle,
                             status: 'cancelled',
+                            time_period: existingTime, // Keep the original time
                             external_id: extId,
                             source: 'google'
                         });
