@@ -1,4 +1,4 @@
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 /**
  * Telegram Sync - App Plugin
  *
@@ -9,7 +9,7 @@ const VERSION = 'v1.2.0';
  * 1. Message @BotFather on Telegram: /newbot
  * 2. Copy the bot token
  * 3. In Thymer Sync Hub, find Telegram record
- * 4. Paste token into config field as: {"bot_token": "YOUR_TOKEN"}
+ * 4. Paste token into Token field
  */
 
 class Plugin extends AppPlugin {
@@ -158,17 +158,12 @@ class Plugin extends AppPlugin {
     async routeMessage(message, data, log, debug) {
         const text = message.text || message.caption || '';
         const timestamp = new Date(message.date * 1000);
-        const timeStr = timestamp.toLocaleTimeString('en-US', {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false,
-        });
 
         debug(`Routing: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}"`);
 
         // Photo handling (future: store photo)
         if (message.photo) {
-            return this.handlePhoto(message, data, timeStr, log, debug);
+            return this.handlePhoto(message, data, timestamp, log, debug);
         }
 
         // URL detection and special handling
@@ -177,20 +172,20 @@ class Plugin extends AppPlugin {
 
             // GitHub issue/PR URL
             if (this.isGitHubIssueUrl(url)) {
-                return this.handleGitHubUrl(url, data, timeStr, log, debug);
+                return this.handleGitHubUrl(url, data, timestamp, log, debug);
             }
 
             // iCal URL
             if (this.isICalUrl(url)) {
-                return this.handleICalUrl(url, data, timeStr, log, debug);
+                return this.handleICalUrl(url, data, timestamp, log, debug);
             }
 
             // Regular web URL - fetch and capture
-            return this.handleWebUrl(url, data, timeStr, log, debug);
+            return this.handleWebUrl(url, data, timestamp, log, debug);
         }
 
-        // Text-based routing (from legacy plugin patterns)
-        return this.handleText(text, data, timeStr, log, debug);
+        // Text-based routing
+        return this.handleText(text, data, timestamp, log, debug);
     }
 
     // =========================================================================
@@ -209,7 +204,7 @@ class Plugin extends AppPlugin {
         return /\.ics(\?|$)/i.test(url) || /webcal:\/\//i.test(url);
     }
 
-    async handleGitHubUrl(url, data, timeStr, log, debug) {
+    async handleGitHubUrl(url, data, timestamp, log, debug) {
         // Extract issue info from URL
         const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)\/(issues|pull)\/(\d+)/);
         if (!match) return null;
@@ -227,7 +222,7 @@ class Plugin extends AppPlugin {
             return null;
         }
 
-        await this.appendOneLiner(journal, timeStr, `${type === 'pull' ? 'PR' : 'Issue'}: [${title}](${url})`);
+        await this.appendOneLiner(journal, timestamp, `${type === 'pull' ? 'PR' : 'Issue'}: [${title}](${url})`);
 
         return {
             verb: 'captured',
@@ -237,7 +232,7 @@ class Plugin extends AppPlugin {
         };
     }
 
-    async handleICalUrl(url, data, timeStr, log, debug) {
+    async handleICalUrl(url, data, timestamp, log, debug) {
         debug(`iCal URL: ${url}`);
 
         // For now, just capture as a link
@@ -245,7 +240,7 @@ class Plugin extends AppPlugin {
         const journal = await this.getTodayJournalRecord(data);
         if (!journal) return null;
 
-        await this.appendOneLiner(journal, timeStr, `Calendar: ${url}`);
+        await this.appendOneLiner(journal, timestamp, `Calendar: ${url}`);
 
         return {
             verb: 'captured',
@@ -255,7 +250,7 @@ class Plugin extends AppPlugin {
         };
     }
 
-    async handleWebUrl(url, data, timeStr, log, debug) {
+    async handleWebUrl(url, data, timestamp, log, debug) {
         debug(`Web URL: ${url}`);
 
         // Fetch and parse the page
@@ -277,7 +272,7 @@ class Plugin extends AppPlugin {
             // Fallback: add to journal
             const journal = await this.getTodayJournalRecord(data);
             if (journal) {
-                await this.appendOneLiner(journal, timeStr, `[${pageInfo.title}](${url})`);
+                await this.appendOneLiner(journal, timestamp, `[${pageInfo.title}](${url})`);
             }
             return { verb: 'captured', title: `"${pageInfo.title.slice(0, 40)}" to`, guid: journal?.guid, major: false };
         }
@@ -329,7 +324,7 @@ class Plugin extends AppPlugin {
         // Also add reference in journal
         const journal = await this.getTodayJournalRecord(data);
         if (journal) {
-            await this.addRefToJournal(journal, timeStr, 'captured', recordGuid);
+            await this.addRefToJournal(journal, timestamp, 'captured', recordGuid);
         }
 
         return {
@@ -476,7 +471,7 @@ class Plugin extends AppPlugin {
             .replace(/&nbsp;/g, ' ');
     }
 
-    async handlePhoto(message, data, timeStr, log, debug) {
+    async handlePhoto(message, data, timestamp, log, debug) {
         debug('Photo message');
 
         // For now, add a note about the photo to journal
@@ -485,7 +480,7 @@ class Plugin extends AppPlugin {
         const journal = await this.getTodayJournalRecord(data);
 
         if (journal) {
-            await this.appendOneLiner(journal, timeStr, `[Photo] ${caption}`);
+            await this.appendOneLiner(journal, timestamp, `[Photo] ${caption}`);
         }
 
         return {
@@ -497,17 +492,16 @@ class Plugin extends AppPlugin {
     }
 
     // =========================================================================
-    // Text Routing (from legacy plugin patterns)
+    // Text Routing
     // =========================================================================
 
-    async handleText(text, data, timeStr, log, debug) {
+    async handleText(text, data, timestamp, log, debug) {
         if (!text.trim()) return null;
 
         const content = text.trim();
         const lines = content.split('\n').filter(l => l.trim() !== '');
 
         const isOneLiner = lines.length === 1;
-        const isShort = lines.length >= 2 && lines.length <= 5 && !content.startsWith('# ');
         const isMarkdownDoc = content.startsWith('# ');
 
         const journal = await this.getTodayJournalRecord(data);
@@ -516,24 +510,50 @@ class Plugin extends AppPlugin {
             return null;
         }
 
-        if (isOneLiner) {
-            // One-liner: simple append with timestamp
-            debug('Routing: one-liner → Journal');
-            await this.appendOneLiner(journal, timeStr, content);
+        // Check if first line is a task or if any lines are tasks
+        const firstLineIsTask = this.isTaskLine(lines[0]);
+        const hasAnyTasks = lines.some(line => this.isTaskLine(line));
+
+        if (isOneLiner && firstLineIsTask) {
+            // Single task line
+            debug('Routing: single task → Journal');
+            const { text: taskText, isImportant, date } = this.parseTaskLine(lines[0]);
+            
+            const existingItems = await journal.getLineItems();
+            const topLevelItems = existingItems.filter(item => item.parent_guid === journal.guid);
+            const lastItem = topLevelItems.length > 0 ? topLevelItems[topLevelItems.length - 1] : null;
+            
+            const taskItem = await journal.createLineItem(null, lastItem, 'task');
+            if (taskItem) {
+                const textSegments = this.parseTextSegments(taskText);
+                const segments = [...textSegments];
+                
+                if (date) {
+                    segments.push({ type: 'text', text: ' ' });
+                    segments.push(this.createDateSegment(date));
+                }
+                
+                taskItem.setSegments(segments);
+                
+                if (isImportant) {
+                    await taskItem.setMetaProperty('done', 4);
+                }
+            }
+            
             return {
-                verb: 'noted',
-                title: `"${content.slice(0, 40)}" to`,
+                verb: 'added task',
+                title: `"${taskText.slice(0, 40)}" to`,
                 guid: journal.guid,
                 major: false
             };
 
-        } else if (isShort) {
-            // Short note (2-5 lines): first line as parent, rest as children
-            debug('Routing: short note → Journal');
-            await this.appendShortNote(journal, timeStr, lines, data);
+        } else if (isOneLiner) {
+            // One-liner: simple append with timestamp
+            debug('Routing: one-liner → Journal');
+            await this.appendOneLiner(journal, timestamp, content);
             return {
                 verb: 'noted',
-                title: `"${lines[0].slice(0, 40)}" to`,
+                title: `"${content.slice(0, 40)}" to`,
                 guid: journal.guid,
                 major: false
             };
@@ -543,7 +563,7 @@ class Plugin extends AppPlugin {
             debug('Routing: markdown doc → Captures');
             const result = await this.createCapture(content, data, log);
             if (result) {
-                await this.addRefToJournal(journal, timeStr, 'added', result.guid);
+                await this.addRefToJournal(journal, timestamp, 'added', result.guid);
                 return {
                     verb: 'added',
                     title: result.title,
@@ -552,7 +572,7 @@ class Plugin extends AppPlugin {
                 };
             } else {
                 // Fallback: insert in journal
-                await this.insertMarkdownToJournal(content, journal, timeStr, data);
+                await this.insertMarkdownToJournal(content, journal, timestamp, data);
                 return {
                     verb: 'noted',
                     title: `"${lines[0].slice(0, 40)}" to`,
@@ -561,20 +581,317 @@ class Plugin extends AppPlugin {
                 };
             }
 
+        } else if (hasAnyTasks) {
+            // Multi-line with tasks: use special handler
+            debug('Routing: multi-line with tasks → Journal');
+            await this.appendMultipleLines(journal, timestamp, lines);
+            
+            const taskCount = lines.filter(l => this.isTaskLine(l)).length;
+            const verb = taskCount === 1 ? 'added task' : `added ${taskCount} tasks`;
+            
+            return {
+                verb: verb,
+                title: `to`,
+                guid: journal.guid,
+                major: false
+            };
+
         } else {
-            // Default (>5 lines, no heading): insert with hierarchy
-            debug('Routing: long text → Journal');
-            const firstLine = lines[0];
-            const restContent = content.split('\n').slice(1).join('\n');
-            const timestampedContent = `**${timeStr}** ${firstLine}\n${restContent}`;
-            await this.insertMarkdownToJournal(timestampedContent, journal, timeStr, data);
+            // Multi-line without tasks: regular note with bullets
+            debug('Routing: multi-line note → Journal');
+            await this.appendShortNote(journal, timestamp, lines, data);
             return {
                 verb: 'noted',
-                title: `"${firstLine.slice(0, 40)}" to`,
+                title: `"${lines[0].slice(0, 40)}" to`,
                 guid: journal.guid,
                 major: false
             };
         }
+    }
+
+    // =========================================================================
+    // Task Parsing
+    // =========================================================================
+
+    /**
+     * Check if a line should be a task
+     */
+    isTaskLine(line) {
+        const trimmed = line.trim();
+        return trimmed.startsWith('[]') || trimmed.toLowerCase().startsWith('task');
+    }
+
+    /**
+     * Parse task text and extract metadata (text, @important flag, dates)
+     */
+    parseTaskLine(line) {
+        let text = line.trim();
+        
+        // Remove [] or TASK prefix
+        if (text.startsWith('[]')) {
+            text = text.slice(2).trim();
+        } else if (text.toLowerCase().startsWith('task')) {
+            text = text.slice(4).trim();
+        }
+
+        // Check for @important and remove it
+        const isImportant = text.toLowerCase().includes('@important');
+        if (isImportant) {
+            text = text.replace(/@important/gi, '').trim();
+        }
+
+        // Extract date and remove it from text
+        const { text: cleanedText, date } = this.extractAndRemoveDate(text);
+
+        return { text: cleanedText, isImportant, date };
+    }
+
+    // =========================================================================
+    // Date Parsing
+    // =========================================================================
+
+    /**
+     * Parse common date formats from text
+     * Supports: @tomorrow, tomorrow, @today, today, Jan 15, 2026-01-15, 15/01, etc.
+     */
+    parseDate(text) {
+        const now = new Date();
+        const lowerText = text.toLowerCase();
+
+        // Handle @tomorrow or tomorrow
+        if (lowerText.includes('@tomorrow') || lowerText.includes('tomorrow')) {
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            return new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate());
+        }
+        
+        // Handle @today or today
+        if (lowerText.includes('@today') || lowerText.includes('today')) {
+            return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        }
+
+        // Month names
+        const monthNames = {
+            jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2,
+            apr: 3, april: 3, may: 4, jun: 5, june: 5,
+            jul: 6, july: 6, aug: 7, august: 7, sep: 8, september: 8,
+            oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
+        };
+
+        // Try "Jan 15" or "January 15" or "@Jan 15"
+        const monthDayMatch = text.match(/@?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\s+(\d{1,2})\b/i);
+        if (monthDayMatch) {
+            const month = monthNames[monthDayMatch[1].toLowerCase()];
+            const day = parseInt(monthDayMatch[2]);
+            let year = now.getFullYear();
+            // If the date has passed this year, assume next year
+            const testDate = new Date(year, month, day);
+            if (testDate < now) {
+                year++;
+            }
+            return new Date(year, month, day);
+        }
+
+        // Try ISO format: 2026-01-15
+        const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+        if (isoMatch) {
+            const year = parseInt(isoMatch[1]);
+            const month = parseInt(isoMatch[2]) - 1;
+            const day = parseInt(isoMatch[3]);
+            return new Date(year, month, day);
+        }
+
+        // Try DD/MM or MM/DD format (assume current year)
+        const slashMatch = text.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+        if (slashMatch) {
+            const first = parseInt(slashMatch[1]);
+            const second = parseInt(slashMatch[2]);
+            // Assume DD/MM if first > 12, otherwise MM/DD
+            let month, day;
+            if (first > 12) {
+                day = first;
+                month = second - 1;
+            } else {
+                month = first - 1;
+                day = second;
+            }
+            const year = now.getFullYear();
+            return new Date(year, month, day);
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract date from text and remove it from the text
+     * @returns {Object} - {text: cleaned text, date: Date|null}
+     */
+    extractAndRemoveDate(text) {
+        const date = this.parseDate(text);
+        if (!date) {
+            return { text, date: null };
+        }
+
+        let cleanedText = text;
+
+        // Remove @tomorrow or tomorrow
+        cleanedText = cleanedText.replace(/@?tomorrow\b/gi, '');
+        
+        // Remove @today or today
+        cleanedText = cleanedText.replace(/@?today\b/gi, '');
+
+        // Remove month + day patterns like "Jan 15" or "@Feb 28"
+        cleanedText = cleanedText.replace(/@?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\b/gi, '');
+
+        // Remove ISO dates
+        cleanedText = cleanedText.replace(/\b\d{4}-\d{2}-\d{2}\b/g, '');
+
+        // Remove slash dates
+        cleanedText = cleanedText.replace(/\b\d{1,2}\/\d{1,2}\b/g, '');
+
+        // Clean up extra spaces
+        cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+
+        return { text: cleanedText, date };
+    }
+
+    // =========================================================================
+    // Datetime Helpers
+    // =========================================================================
+
+    /**
+     * Format time as HHMMSS for Thymer datetime segments
+     */
+    formatTimeHHMMSS(date) {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        return `${hours}${minutes}${seconds}`;
+    }
+
+    /**
+     * Create a Thymer datetime segment for a time-only value
+     */
+    createTimeSegment(date) {
+        // Calculate timezone offset in quarter-hours from UTC
+        // JavaScript's getTimezoneOffset() returns minutes west of UTC (opposite sign)
+        // Thymer expects quarter-hours east of UTC
+        const offsetMinutes = -date.getTimezoneOffset();
+        const offsetQuarterHours = offsetMinutes / 15;
+        
+        return {
+            type: 'datetime',
+            text: {
+                d: "",  // Empty string = time only (no date)
+                t: {
+                    t: this.formatTimeHHMMSS(date),
+                    tz: offsetQuarterHours
+                }
+            }
+        };
+    }
+
+    /**
+     * Format date as YYYYMMDD for Thymer datetime segments
+     */
+    formatDateYYYYMMDD(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}${month}${day}`;
+    }
+
+    /**
+     * Create a Thymer datetime segment for a date-only value
+     */
+    createDateSegment(date) {
+        return {
+            type: 'datetime',
+            text: {
+                d: this.formatDateYYYYMMDD(date)
+                // No 't' property = date only
+            }
+        };
+    }
+
+    // =========================================================================
+    // Text Segment Parsing (hashtags and links)
+    // =========================================================================
+
+    /**
+     * Parse text into segments handling hashtags and markdown links
+     */
+    parseTextSegments(text) {
+        const segments = [];
+        let remaining = text;
+        
+        while (remaining.length > 0) {
+            // Check for markdown link: [text](url)
+            const linkMatch = remaining.match(/\[([^\]]+)\]\(([^)]+)\)/);
+            
+            // Check for hashtag: #word (letters, numbers, underscores, hyphens)
+            const hashtagMatch = remaining.match(/(^|[^#])#([a-zA-Z0-9_-]+)/);
+            
+            // Find which comes first
+            let firstMatch = null;
+            let firstIndex = Infinity;
+            let matchType = null;
+            
+            if (linkMatch && linkMatch.index < firstIndex) {
+                firstMatch = linkMatch;
+                firstIndex = linkMatch.index;
+                matchType = 'link';
+            }
+            
+            if (hashtagMatch && hashtagMatch.index < firstIndex) {
+                firstMatch = hashtagMatch;
+                firstIndex = hashtagMatch.index;
+                matchType = 'hashtag';
+            }
+            
+            if (!firstMatch) {
+                // No more special patterns, add remaining text
+                if (remaining) {
+                    segments.push({ type: 'text', text: remaining });
+                }
+                break;
+            }
+            
+            if (matchType === 'link') {
+                // Add text before link
+                if (linkMatch.index > 0) {
+                    segments.push({ type: 'text', text: remaining.slice(0, linkMatch.index) });
+                }
+                
+                // Add link segment
+                segments.push({ 
+                    type: 'link', 
+                    text: linkMatch[1], 
+                    url: linkMatch[2] 
+                });
+                
+                // Continue with remaining text
+                remaining = remaining.slice(linkMatch.index + linkMatch[0].length);
+                
+            } else if (matchType === 'hashtag') {
+                // Add text before hashtag (including any prefix character)
+                const beforeText = remaining.slice(0, hashtagMatch.index + hashtagMatch[1].length);
+                if (beforeText) {
+                    segments.push({ type: 'text', text: beforeText });
+                }
+                
+                // Add hashtag segment with #
+                segments.push({ 
+                    type: 'hashtag', 
+                    text: '#' + hashtagMatch[2]
+                });
+                
+                // Continue with remaining text
+                remaining = remaining.slice(hashtagMatch.index + hashtagMatch[0].length);
+            }
+        }
+        
+        return segments.length > 0 ? segments : [{ type: 'text', text: text }];
     }
 
     // =========================================================================
@@ -608,42 +925,33 @@ class Plugin extends AppPlugin {
         }
     }
 
-    async appendOneLiner(record, timeStr, text) {
+    async appendOneLiner(record, timestamp, text) {
         const existingItems = await record.getLineItems();
         const topLevelItems = existingItems.filter(item => item.parent_guid === record.guid);
         const lastItem = topLevelItems.length > 0 ? topLevelItems[topLevelItems.length - 1] : null;
 
+        // Extract date from text if present
+        const { text: cleanedText, date } = this.extractAndRemoveDate(text);
+
         const newItem = await record.createLineItem(null, lastItem, 'text');
         if (newItem) {
-            // Parse inline markdown (links, bold, etc.)
-            const segments = this.parseInlineMarkdown(timeStr, text);
+            // Create time segment and parse text for hashtags/links
+            const timeSegment = this.createTimeSegment(timestamp);
+            const textSegments = this.parseTextSegments(cleanedText);
+            
+            const segments = [timeSegment, { type: 'text', text: ' ' }, ...textSegments];
+            
+            // Add date segment if we found one
+            if (date) {
+                segments.push({ type: 'text', text: ' ' });
+                segments.push(this.createDateSegment(date));
+            }
+            
             newItem.setSegments(segments);
         }
     }
 
-    parseInlineMarkdown(timeStr, text) {
-        // Check for markdown link: [text](url)
-        const linkMatch = text.match(/\[([^\]]+)\]\(([^)]+)\)/);
-        if (linkMatch) {
-            const before = text.slice(0, linkMatch.index);
-            const linkText = linkMatch[1];
-            const url = linkMatch[2];
-            const after = text.slice(linkMatch.index + linkMatch[0].length);
-
-            const segments = [{ type: 'bold', text: timeStr }, { type: 'text', text: ' ' }];
-            if (before) segments.push({ type: 'text', text: before });
-            segments.push({ type: 'link', text: linkText, url: url });
-            if (after) segments.push({ type: 'text', text: after });
-            return segments;
-        }
-
-        return [
-            { type: 'bold', text: timeStr },
-            { type: 'text', text: ' ' + text }
-        ];
-    }
-
-    async appendShortNote(record, timeStr, lines, data) {
+    async appendShortNote(record, timestamp, lines, data) {
         const existingItems = await record.getLineItems();
         const topLevelItems = existingItems.filter(item => item.parent_guid === record.guid);
         const lastItem = topLevelItems.length > 0 ? topLevelItems[topLevelItems.length - 1] : null;
@@ -652,44 +960,150 @@ class Plugin extends AppPlugin {
         const parentItem = await record.createLineItem(null, lastItem, 'text');
         if (!parentItem) return;
 
-        parentItem.setSegments([
-            { type: 'bold', text: timeStr },
-            { type: 'text', text: ' ' + lines[0] }
-        ]);
+        // Extract date from first line if present
+        const { text: cleanedFirstLine, date: firstLineDate } = this.extractAndRemoveDate(lines[0]);
 
-        // Add remaining lines as children
+        const timeSegment = this.createTimeSegment(timestamp);
+        const firstLineSegments = this.parseTextSegments(cleanedFirstLine);
+        const parentSegments = [timeSegment, { type: 'text', text: ' ' }, ...firstLineSegments];
+        
+        // Add date segment if found in first line
+        if (firstLineDate) {
+            parentSegments.push({ type: 'text', text: ' ' });
+            parentSegments.push(this.createDateSegment(firstLineDate));
+        }
+        
+        parentItem.setSegments(parentSegments);
+
+        // Add remaining lines as bulleted children
         let childLast = null;
         for (let i = 1; i < lines.length; i++) {
-            const childItem = await record.createLineItem(parentItem, childLast, 'text');
+            const childItem = await record.createLineItem(parentItem, childLast, 'ulist');
             if (childItem) {
-                childItem.setSegments([{ type: 'text', text: lines[i] }]);
+                // Extract date from child line if present
+                const { text: cleanedChildLine, date: childLineDate } = this.extractAndRemoveDate(lines[i]);
+                const childSegments = this.parseTextSegments(cleanedChildLine);
+                const segments = [...childSegments];
+                
+                // Add date segment if found
+                if (childLineDate) {
+                    segments.push({ type: 'text', text: ' ' });
+                    segments.push(this.createDateSegment(childLineDate));
+                }
+                
+                childItem.setSegments(segments);
                 childLast = childItem;
             }
         }
     }
 
-    async addRefToJournal(journalRecord, timeStr, action, guid) {
+    /**
+     * Handle multiple lines that may contain tasks
+     * Tasks don't get timestamps, regular lines do
+     * Lines after tasks become children of those tasks
+     */
+    async appendMultipleLines(record, timestamp, lines) {
+        const existingItems = await record.getLineItems();
+        const topLevelItems = existingItems.filter(item => item.parent_guid === record.guid);
+        let lastTopLevelItem = topLevelItems.length > 0 ? topLevelItems[topLevelItems.length - 1] : null;
+        
+        let currentTaskParent = null;
+        let lastChildOfTask = null;
+        
+        for (const line of lines) {
+            const isTask = this.isTaskLine(line);
+            
+            if (isTask) {
+                // Create a new task (no timestamp)
+                const { text: taskText, isImportant, date } = this.parseTaskLine(line);
+                
+                const taskItem = await record.createLineItem(null, lastTopLevelItem, 'task');
+                if (taskItem) {
+                    // Build segments: text, optional date, parse hashtags
+                    const textSegments = this.parseTextSegments(taskText);
+                    const segments = [...textSegments];
+                    
+                    if (date) {
+                        segments.push({ type: 'text', text: ' ' });
+                        segments.push(this.createDateSegment(date));
+                    }
+                    
+                    taskItem.setSegments(segments);
+                    
+                    // Set important flag if needed
+                    if (isImportant) {
+                        await taskItem.setMetaProperty('done', 4);
+                    }
+                    
+                    lastTopLevelItem = taskItem;
+                    currentTaskParent = taskItem;
+                    lastChildOfTask = null;
+                }
+            } else {
+                // Not a task line - extract date if present
+                const { text: cleanedText, date } = this.extractAndRemoveDate(line);
+                
+                if (currentTaskParent) {
+                    // We have a task parent, add as bulleted child
+                    const childItem = await record.createLineItem(currentTaskParent, lastChildOfTask, 'ulist');
+                    if (childItem) {
+                        const textSegments = this.parseTextSegments(cleanedText);
+                        const segments = [...textSegments];
+                        
+                        // Add date segment if found
+                        if (date) {
+                            segments.push({ type: 'text', text: ' ' });
+                            segments.push(this.createDateSegment(date));
+                        }
+                        
+                        childItem.setSegments(segments);
+                        lastChildOfTask = childItem;
+                    }
+                } else {
+                    // No task parent, create as regular text with timestamp
+                    const textItem = await record.createLineItem(null, lastTopLevelItem, 'text');
+                    if (textItem) {
+                        const timeSegment = this.createTimeSegment(timestamp);
+                        const textSegments = this.parseTextSegments(cleanedText);
+                        const segments = [timeSegment, { type: 'text', text: ' ' }, ...textSegments];
+                        
+                        // Add date segment if found
+                        if (date) {
+                            segments.push({ type: 'text', text: ' ' });
+                            segments.push(this.createDateSegment(date));
+                        }
+                        
+                        textItem.setSegments(segments);
+                        lastTopLevelItem = textItem;
+                    }
+                }
+            }
+        }
+    }
+
+    async addRefToJournal(journalRecord, timestamp, action, guid) {
         const existingItems = await journalRecord.getLineItems();
         const topLevelItems = existingItems.filter(item => item.parent_guid === journalRecord.guid);
         const lastItem = topLevelItems.length > 0 ? topLevelItems[topLevelItems.length - 1] : null;
 
         const newItem = await journalRecord.createLineItem(null, lastItem, 'text');
         if (newItem) {
+            const timeSegment = this.createTimeSegment(timestamp);
             newItem.setSegments([
-                { type: 'bold', text: timeStr },
+                timeSegment,
                 { type: 'text', text: ` ${action} ` },
                 { type: 'ref', text: { guid: guid } }
             ]);
         }
     }
 
-    async insertMarkdownToJournal(content, journal, timeStr, data) {
+    async insertMarkdownToJournal(content, journal, timestamp, data) {
         // Use Sync Hub's markdown utilities if available
         if (window.syncHub?.insertMarkdown) {
             await window.syncHub.insertMarkdown(content, journal, null);
         } else {
             // Fallback: simple text insert
-            await this.appendOneLiner(journal, timeStr, content.split('\n')[0]);
+            await this.appendOneLiner(journal, timestamp, content.split('\n')[0]);
         }
     }
 
